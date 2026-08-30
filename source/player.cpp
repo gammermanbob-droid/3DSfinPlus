@@ -613,20 +613,34 @@ static void presentPlaybackBottom(double posSec, double durSec, bool paused,
         C2D_DrawRectSolid(12, 124, 0, 296 * frac, 8, C2D_Color32(0, 235, 205, 255));
 
         auto text = [](const char* s, float x, float y, float scale, u32 color) {
-            if (!g_hudFont || !g_hudTextBuf) return;
+            if (!g_hudTextBuf) return;
             C2D_Text t;
-            C2D_TextFontParse(&t, g_hudFont, g_hudTextBuf, s);
+            // Use Citro2D's already-initialised default font. Loading a second
+            // system-font handle after the main UI works on hardware but returns
+            // an unusable handle in Azahar/SweepDSEmu, which made every HUD label
+            // (including lyrics) silently disappear while shapes still rendered.
+            C2D_TextParse(&t, g_hudTextBuf, s);
             C2D_TextOptimize(&t);
             C2D_DrawText(&t, C2D_WithColor, x, y, 0.5f, scale, scale, color);
         };
         std::string lyric;
-        if (cues) {
+        if (cues && !cues->empty()) {
+            // Prefer the cue whose time range contains the playback clock.  Some
+            // Jellyfin lyric providers leave gaps (and a few report a slightly
+            // early end time), so keep the most recent line visible through a
+            // gap.  Before the first timestamp, show the first line instead of a
+            // misleading "no lyrics" placeholder.  This also makes unsynchronised
+            // sidecars useful on the small bottom screen.
+            const SubtitleCue* chosen = &cues->front();
             for (const auto& cue : *cues) {
-                if (posSec >= cue.start && posSec <= cue.end) {
-                    lyric = cue.text;
+                if (cue.start <= posSec) chosen = &cue;
+                if (posSec >= cue.start && posSec < cue.end) {
+                    chosen = &cue;
                     break;
                 }
+                if (cue.start > posSec) break;
             }
+            lyric = chosen->text;
         }
         if (!lyric.empty()) {
             size_t p = 0;
@@ -1120,6 +1134,9 @@ bool playerPlay(const std::string& url, long long runTimeTicks,
         }
     }
 
+    // Parse now so even the very first visible HUD frame contains a lyric line.
+    std::vector<SubtitleCue> subtitleCues = parseVtt(subtitleVtt);
+
     // The HUD is fully redrawn into both alternating buffers below. Explicit
     // double buffering matches what Azahar presents after each VBlank.
     gfxSetScreenFormat(GFX_BOTTOM, GSP_BGR8_OES);
@@ -1148,7 +1165,10 @@ bool playerPlay(const std::string& url, long long runTimeTicks,
     g_hudFrameAccepted = false;
     presentPlaybackBottom(startSec,
                           runTimeTicks > 0 ? runTimeTicks / 10000000.0 : 0.0,
-                          false);
+                          false, &subtitleCues);
+    // Keep the established Azahar presentation order: these top-screen swaps
+    // also make its already-rendered bottom HUD visible without touching the
+    // bottom framebuffer while Citro3D owns it.
     if (audioOnly) blitArtwork(artworkData);
     DBG("playerPlay\n");
 
@@ -1156,7 +1176,7 @@ bool playerPlay(const std::string& url, long long runTimeTicks,
     if (dbg) {
         u16 bottomW = 0, bottomH = 0;
         gfxGetFramebuffer(GFX_BOTTOM, GFX_LEFT, &bottomW, &bottomH);
-        fprintf(dbg, "BUILD=lyrics-layout-hud-14 vttBytes=%lu bottomFormat=%d dims=%ux%u c3d=%d c2d=%d target=%p frameTry=%d frameOk=%d\n",
+        fprintf(dbg, "BUILD=lyrics-safe-hud-16 vttBytes=%lu bottomFormat=%d dims=%ux%u c3d=%d c2d=%d target=%p frameTry=%d frameOk=%d\n",
                 (unsigned long)subtitleVtt.size(),
                 (int)gfxGetScreenFormat(GFX_BOTTOM), bottomW, bottomH,
                 (int)g_hudC3dOk, (int)g_hudC2dOk, (void*)g_playbackHudTarget,
@@ -1289,9 +1309,12 @@ bool playerPlay(const std::string& url, long long runTimeTicks,
     // Seek-bar state: position from PES PTS, total from the Jellyfin item.
     double    durSec      = runTimeTicks > 0 ? runTimeTicks / 10000000.0 : 0.0;
     double    posSec      = startSec;      // resume offset; PTS delta is added below
-    std::vector<SubtitleCue> subtitleCues = parseVtt(subtitleVtt);
     if (dbg) {
         fprintf(dbg, "subtitle cues=%lu\n", (unsigned long)subtitleCues.size());
+        for (size_t i = 0; i < subtitleCues.size() && i < 5; i++)
+            fprintf(dbg, "cue[%lu]=%.3f..%.3f text=%.48s\n",
+                    (unsigned long)i, subtitleCues[i].start,
+                    subtitleCues[i].end, subtitleCues[i].text.c_str());
         fflush(dbg);
     }
     long long firstPts    = -1;          // PTS of the first frame (position origin)

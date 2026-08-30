@@ -3,11 +3,14 @@ Video playback of your entire jellyfin catalog, on your New 3ds!
 
 3DSfinPlus also browses Jellyfin music libraries (artist, album, and song),
 plays server-transcoded AAC audio, and supports shuffled continuous playback.
-3DSfin is a *work in progress* jellyfin client for New Nintendo 3DS. 
+Music playback uses a bottom-screen HUD with play/pause, seeking, progress, and
+album artwork on the top screen.
+3DSfin is a *work in progress* jellyfin client for New Nintendo 3DS.
 
 [![GitHub Release](https://img.shields.io/github/v/release/arechawla/3dsfin)](https://github.com/arechawla/3DSfin/releases) ![Downloads](https://img.shields.io/github/downloads/arechawla/3dsfin/total)
 
-*NOTE:* .cia does **not** work as of now. Use .3dsx and launch from homebrew for working version.
+The release includes both Homebrew Launcher (`.3dsx`) and installable
+`3dsfinplus.cia` builds.
 
 ## Install 
 
@@ -57,6 +60,13 @@ Playback:
 Press **X** in any item grid to shuffle all playable movies, episodes, or songs
 under the current library, series, season, artist, album, or folder. Songs advance
 automatically until the shuffled queue ends; press **B** to stop and return.
+
+### Lyrics (WIP)
+
+3DSfinPlus can request Jellyfin lyrics for music and display lyric text in the
+bottom-screen HUD. This compatibility is **work in progress**: the initial lyric
+line displays, but synchronized lines do not yet advance during playback. Video
+subtitle playback is unaffected.
 
 
 
