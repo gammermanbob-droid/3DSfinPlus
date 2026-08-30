@@ -515,12 +515,63 @@ static std::string hlsResolve(const std::string& base, const std::string& ref) {
 }
 
 static void flushBottomConsole() {
-    u16 w = 0, h = 0;
-    u8* fb = gfxGetFramebuffer(GFX_BOTTOM, GFX_LEFT, &w, &h);
-    // gfxInitDefault keeps the bottom screen in 24-bit BGR8; consoleInit does
-    // not change that format. Flushing only two bytes per pixel left the final
-    // third of the console buffer cached, so Azahar displayed a blank screen.
-    if (fb) GSPGPU_FlushDataCache(fb, (u32)w * (u32)h * 3);
+    // Use libctru's framebuffer-aware flush rather than guessing the allocation
+    // size/stride. This covers both emulator and hardware framebuffer layouts.
+    gfxFlushBuffers();
+}
+
+static void hudRect(u8* fb, int x, int y, int w, int h,
+                    u8 r, u8 g, u8 b) {
+    if (!fb) return;
+    if (x < 0) { w += x; x = 0; }
+    if (y < 0) { h += y; y = 0; }
+    if (x + w > 320) w = 320 - x;
+    if (y + h > 240) h = 240 - y;
+    for (int py = y; py < y + h; py++)
+        for (int px = x; px < x + w; px++) {
+            u32 off = (px * 240 + (239 - py)) * 3;
+            fb[off] = b; fb[off + 1] = g; fb[off + 2] = r;
+        }
+}
+
+static void drawPlaybackHud(double posSec, double durSec, bool paused) {
+    u8* fb = gfxGetFramebuffer(GFX_BOTTOM, GFX_LEFT, nullptr, nullptr);
+    if (!fb) return;
+
+    // Dedicated dark control deck across the bottom quarter of the touch screen.
+    hudRect(fb, 0, 168, 320, 72, 10, 18, 28);
+    hudRect(fb, 18, 176, 284, 8, 45, 58, 72);
+    double frac = durSec > 0 ? posSec / durSec : 0;
+    if (frac < 0) frac = 0;
+    if (frac > 1) frac = 1;
+    hudRect(fb, 18, 176, (int)(284 * frac), 8, 38, 210, 190);
+
+    // Rewind / forward chevrons.
+    for (int i = 0; i < 12; i++) {
+        hudRect(fb, 54 + i, 202 - i, 3, 2 * i + 2, 230, 235, 240);
+        hudRect(fb, 78 + i, 202 - i, 3, 2 * i + 2, 230, 235, 240);
+        hudRect(fb, 239 - i, 202 - i, 3, 2 * i + 2, 230, 235, 240);
+        hudRect(fb, 215 - i, 202 - i, 3, 2 * i + 2, 230, 235, 240);
+    }
+
+    // Centre play/pause button.
+    hudRect(fb, 140, 193, 40, 40, 28, 42, 56);
+    if (paused) {
+        for (int i = 0; i < 14; i++)
+            hudRect(fb, 151 + i, 204 - i / 2, 2, i + 1, 255, 255, 255);
+    } else {
+        hudRect(fb, 151, 203, 6, 20, 255, 255, 255);
+        hudRect(fb, 164, 203, 6, 20, 255, 255, 255);
+    }
+
+    // Red B/exit indicator at the far right.
+    hudRect(fb, 286, 198, 24, 28, 132, 32, 42);
+    hudRect(fb, 292, 204, 12, 4, 255, 255, 255);
+    hudRect(fb, 292, 214, 12, 4, 255, 255, 255);
+    hudRect(fb, 292, 204, 4, 14, 255, 255, 255);
+    hudRect(fb, 300, 207, 4, 8, 255, 255, 255);
+
+    GSPGPU_FlushDataCache(fb, 320 * 240 * 3);
 }
 
 static int hlsSegmentNumber(const std::string& uri) {
@@ -1093,6 +1144,7 @@ bool playerPlay(const std::string& url, long long runTimeTicks,
         drawMeta(series, title, year);
         drawControls();
         drawSeekBar(startSec, durSec);
+        drawPlaybackHud(startSec, durSec, false);
         flushBottomConsole();
     }
 
@@ -1346,6 +1398,7 @@ bool playerPlay(const std::string& url, long long runTimeTicks,
             drawSubtitle(subtitleCues, posSec);
             lastSubtitleTick = (int)(posSec * 4.0);
         }
+        if (!g_dbg) drawPlaybackHud(posSec, durSec, paused);
         if (!g_dbg) flushBottomConsole();
 
         // Stream finished and fully drained → done.
