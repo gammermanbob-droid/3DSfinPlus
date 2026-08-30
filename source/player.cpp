@@ -514,6 +514,12 @@ static std::string hlsResolve(const std::string& base, const std::string& ref) {
     return (slash == std::string::npos ? origin + "/" : base.substr(0, slash + 1)) + ref;
 }
 
+static void flushBottomConsole() {
+    u16 w = 0, h = 0;
+    u8* fb = gfxGetFramebuffer(GFX_BOTTOM, GFX_LEFT, &w, &h);
+    if (fb) GSPGPU_FlushDataCache(fb, (u32)w * (u32)h * 2);
+}
+
 static int hlsSegmentNumber(const std::string& uri) {
     size_t end = uri.find(".ts");
     if (end == std::string::npos) return -1;
@@ -872,11 +878,6 @@ static void processAAC(unsigned char* buf, int len, FILE* dbg) {
         long long vref = (g_lastBlitPts >= 0) ? g_lastBlitPts : g_vidFirstPts;
         bool stale = (g_audNextPts >= 0.0 && vref >= 0 &&
                       g_audNextPts < vref / 90000.0 - 0.5);
-        // Video pacing throttles the demux naturally. Music has no video clock,
-        // so wait for DSP queue room instead of filling all wave buffers and
-        // dropping the rest of the song in large, audible jumps.
-        while (g_audioOnly && audio::queuedBufs() >= 24)
-            svcSleepThread(5000000LL);
         if (!stale)
             audio::push(g_pcm, spc, fi.nChans, g_audNextPts);
         if (g_audNextPts >= 0.0 && fi.sampRateOut > 0)
@@ -1099,6 +1100,8 @@ bool playerPlay(const std::string& url, long long runTimeTicks,
     if (!g_dbg) {                                // static text around the seek bar
         drawMeta(series, title, year);
         drawControls();
+        drawSeekBar(startSec, durSec);
+        flushBottomConsole();
     }
 
     // Start the background download thread filling the ring. Same priority as the
@@ -1205,7 +1208,14 @@ bool playerPlay(const std::string& url, long long runTimeTicks,
         // inside processH264 (it may sleep); meanwhile dlThread keeps refilling the
         // ring. Cap the batch so the debug toggle and seek bar stay responsive.
         int processed = 0;
-        while (!stop && ringUsed() >= TS_SZ && processed < 128) {
+        int batchLimit = audioOnly ? 8 : 128;
+        // Music has no video pacer. Leave the compressed stream in the ring while
+        // the DSP queue is comfortably full; unlike the old wait inside
+        // processAAC(), this returns to the outer loop every frame so controls,
+        // lyrics, and the progress bar remain responsive.
+        while (!stop && (!audioOnly || audio::queuedBufs() < 24) &&
+               ringUsed() >= TS_SZ &&
+               processed < batchLimit) {
             ringTake(pkt, TS_SZ);
             processed++;
             pktCount++;
@@ -1320,7 +1330,8 @@ bool playerPlay(const std::string& url, long long runTimeTicks,
         if (!g_dbg) {
             if (processed > 0) {
                 if (rebuf) { printf("\x1b[%d;5H               ", ROW_STATUS); rebuf = false; }
-            } else if (!g_ring.producerDone && !rebuf) {
+            } else if (!g_ring.producerDone &&
+                       !(audioOnly && audio::queuedBufs() >= 24) && !rebuf) {
                 printf("\x1b[%d;5HBuffering...   ", ROW_STATUS); rebuf = true;
             }
         }
@@ -1343,6 +1354,7 @@ bool playerPlay(const std::string& url, long long runTimeTicks,
             drawSubtitle(subtitleCues, posSec);
             lastSubtitleTick = (int)(posSec * 4.0);
         }
+        if (!g_dbg) flushBottomConsole();
 
         // Stream finished and fully drained → done.
         if (g_ring.producerDone && ringUsed() < TS_SZ) break;
