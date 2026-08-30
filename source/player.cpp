@@ -952,23 +952,12 @@ bool playerPlay(const std::string& url, long long runTimeTicks,
         }
     }
 
-    // Bottom-screen console (must come after gfxInitDefault). Stays blank unless
-    // debug is toggled on with X + D-Pad Up.
+    // Keep the bottom player on one stable framebuffer. Swapping buffers after
+    // consoleInit left the console drawing into the hidden buffer on Azahar,
+    // which made working controls and progress text completely invisible.
+    gfxSetDoubleBuffering(GFX_BOTTOM, false);
     consoleInit(GFX_BOTTOM, NULL);
-    // Clear both newly-created bottom buffers before the first console draw.
-    // Azahar can otherwise present the stale Citro2D buffer for one frame,
-    // producing a brief striped/error-looking flash during playback startup.
-    for (int pass = 0; pass < 2; pass++) {
-        u16 fbw = 0, fbh = 0;
-        u8* fb = gfxGetFramebuffer(GFX_BOTTOM, GFX_LEFT, &fbw, &fbh);
-        // consoleInit uses RGB565. Clearing it as a three-byte BGR framebuffer
-        // overran the allocation and caused the teal striped screen in Azahar.
-        u32 bytes = (u32)fbw * (u32)fbh * 2;
-        memset(fb, 0, bytes);
-        GSPGPU_FlushDataCache(fb, bytes);
-        gspWaitForVBlank();
-        gfxScreenSwapBuffers(GFX_BOTTOM, false);
-    }
+    consoleClear();
     if (audioOnly) blitArtwork(artworkData);
     DBG("playerPlay\n");
 
@@ -1175,7 +1164,7 @@ bool playerPlay(const std::string& url, long long runTimeTicks,
             break;
         }
 
-        if (hidKeysDown() & KEY_B) break;
+        if (hidKeysDown() & KEY_B) { stop = true; break; }
 
         // Pause/resume on A. Held-based edge detect for the same reason as seek.
         // Pausing simply stops the loop doing any work: no demux, no decode, no
@@ -1368,12 +1357,14 @@ bool playerPlay(const std::string& url, long long runTimeTicks,
 
     // Show whatever is still queued at its proper pace before tearing down —
     // unless the user is seeking away, in which case just drop it.
-    if (audActive && audLen > 0) processAAC(audBuf, (int)audLen, dbg);
+    if (!stop && seekReq < 0 && audActive && audLen > 0)
+        processAAC(audBuf, (int)audLen, dbg);
     if (!stop && seekReq < 0 && vidPid >= 0)
         displayPump(false, true, &stop, dbg);
 
     if (finishedOut)
-        *finishedOut = seekReq < 0 && g_ring.producerDone && ringUsed() < TS_SZ;
+        *finishedOut = !stop && seekReq < 0 &&
+                       g_ring.producerDone && ringUsed() < TS_SZ;
 
     DBG("End: pkts=%u frms=%u\n", (unsigned)pktCount, (unsigned)frameCount);
     g_paceLog = nullptr;
@@ -1384,7 +1375,7 @@ bool playerPlay(const std::string& url, long long runTimeTicks,
         fflush(dbg);
     }
 
-    if (seekReq < 0)
+    if (!stop && seekReq < 0)
         svcSleepThread(2000000000LL); // show stats for 2s before returning
 
     // Stop the producer. HLS responses are finite, so an in-flight request
