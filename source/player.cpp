@@ -1073,7 +1073,7 @@ bool playerPlay(const std::string& url, long long runTimeTicks,
     if (dbg) {
         u16 bottomW = 0, bottomH = 0;
         gfxGetFramebuffer(GFX_BOTTOM, GFX_LEFT, &bottomW, &bottomH);
-        fprintf(dbg, "BUILD=citro2d-detached-hud-10 vttBytes=%lu bottomFormat=%d dims=%ux%u c3d=%d c2d=%d target=%p\n",
+        fprintf(dbg, "BUILD=audio-no-mvd-hud-11 vttBytes=%lu bottomFormat=%d dims=%ux%u c3d=%d c2d=%d target=%p\n",
                 (unsigned long)subtitleVtt.size(),
                 (int)gfxGetScreenFormat(GFX_BOTTOM), bottomW, bottomH,
                 (int)g_hudC3dOk, (int)g_hudC2dOk, (void*)g_playbackHudTarget);
@@ -1123,11 +1123,16 @@ bool playerPlay(const std::string& url, long long runTimeTicks,
     g_fifoHead = 0; g_fifoLen = 0; g_dispCount = 0;
     g_lastBlitPts = -1; g_vidFirstPts = -1;
 
-    // Init MVD hardware decoder
-    Result mvdRet = mvdstdInit(MVDMODE_VIDEOPROCESSING,
-                               MVD_INPUT_H264, MVD_OUTPUT_BGR565,
-                               MVD_DEFAULT_WORKBUF_SIZE, nullptr);
-    if (R_FAILED(mvdRet)) {
+    // Audio-only streams have no video PID. Do not initialize MVD for them:
+    // besides wasting memory, Azahar serializes MVD and Citro3D rendering and
+    // consequently drops every music-HUD draw command.
+    bool mvdOn = !audioOnly;
+    Result mvdRet = 0;
+    if (mvdOn)
+        mvdRet = mvdstdInit(MVDMODE_VIDEOPROCESSING,
+                            MVD_INPUT_H264, MVD_OUTPUT_BGR565,
+                            MVD_DEFAULT_WORKBUF_SIZE, nullptr);
+    if (mvdOn && R_FAILED(mvdRet)) {
         printf("mvdstdInit fail: 0x%08X\n", (unsigned)mvdRet);
         if (dbg) { fprintf(dbg, "mvdstdInit fail: 0x%08X\n", (unsigned)mvdRet); fclose(dbg); }
         linearFree(g_ring.data); linearFree(pesBuf);
@@ -1140,22 +1145,28 @@ bool playerPlay(const std::string& url, long long runTimeTicks,
     }
     DBG("MVD OK\n");
 
-    MVDSTD_Config mvdCfg;
-    mvdstdGenerateDefaultConfig(&mvdCfg, VID_W, VID_H, VID_W, VID_H,
-                                nullptr, nullptr, nullptr);
-    mvdCfg.physaddr_outdata0 = osConvertVirtToPhys(g_fifo[0].buf);
-    mvdCfg.physaddr_outdata1 = osConvertVirtToPhys(g_fifo[0].buf);
-    MVDSTD_SetConfig(&mvdCfg);
-    DLOG(dbg, "fifo[0] virt=%08lX phys=%08lX slots=%d\n",
-         (unsigned long)g_fifo[0].buf,
-         (unsigned long)mvdCfg.physaddr_outdata0, g_fifoN);
+    MVDSTD_Config mvdCfg{};
+    if (mvdOn) {
+        mvdstdGenerateDefaultConfig(&mvdCfg, VID_W, VID_H, VID_W, VID_H,
+                                    nullptr, nullptr, nullptr);
+        mvdCfg.physaddr_outdata0 = osConvertVirtToPhys(g_fifo[0].buf);
+        mvdCfg.physaddr_outdata1 = osConvertVirtToPhys(g_fifo[0].buf);
+        MVDSTD_SetConfig(&mvdCfg);
+        DLOG(dbg, "fifo[0] virt=%08lX phys=%08lX slots=%d\n",
+             (unsigned long)g_fifo[0].buf,
+             (unsigned long)mvdCfg.physaddr_outdata0, g_fifoN);
+    } else {
+        DLOG(dbg, "MVD skipped for audio-only playback\n");
+    }
 
     // Override probe: stock libctru returns -1 (FFFFFFFF) for a NULL config;
     // our vendored/patched mvd.c allows NULL. This single line proves which
     // mvd.c is actually linked into the running binary.
-    Result nullProbe = mvdstdRenderVideoFrame(nullptr, false);
-    DLOG(dbg, "NULLrender probe=%08lX (FFFFFFFF=stock libctru, else=patched mvd.c)\n",
-         (unsigned long)nullProbe);
+    if (mvdOn) {
+        Result nullProbe = mvdstdRenderVideoFrame(nullptr, false);
+        DLOG(dbg, "NULLrender probe=%08lX (FFFFFFFF=stock libctru, else=patched mvd.c)\n",
+             (unsigned long)nullProbe);
+    }
 
     // ─── Audio: ndsp output + Helix AAC decoder ───────────────────────────────
     // ndsp init fails (and audio stays silent) if dsp_firm wasn't dumped to the
@@ -1504,7 +1515,7 @@ bool playerPlay(const std::string& url, long long runTimeTicks,
     if (dbg) fclose(dbg);
     AACFreeDecoder(g_aac); g_aac = nullptr;
     audio::exit();
-    mvdstdExit();
+    if (mvdOn) mvdstdExit();
     linearFree(g_ring.data); linearFree(pesBuf);
     linearFree(nalBuf); linearFree(audBuf);
     freeFifoSlots();
