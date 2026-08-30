@@ -680,6 +680,10 @@ int main() {
                 freeLibCovers();      // textures live in VRAM that playback tears down
                 freeResumeCovers();
                 if (!browseStack.empty()) freeLevelCovers(browseStack.back());
+                // Azahar retains a render target's screen-output binding after
+                // C3D_Fini. Detach explicitly so playback can own both screens.
+                C3D_RenderTargetDetachOutput(topScreen);
+                C3D_RenderTargetDetachOutput(botScreen);
                 C2D_Fini();
                 C3D_Fini();
 

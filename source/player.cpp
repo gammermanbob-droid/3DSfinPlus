@@ -1073,7 +1073,7 @@ bool playerPlay(const std::string& url, long long runTimeTicks,
     if (dbg) {
         u16 bottomW = 0, bottomH = 0;
         gfxGetFramebuffer(GFX_BOTTOM, GFX_LEFT, &bottomW, &bottomH);
-        fprintf(dbg, "BUILD=citro2d-bound-hud-9 vttBytes=%lu bottomFormat=%d dims=%ux%u c3d=%d c2d=%d target=%p\n",
+        fprintf(dbg, "BUILD=citro2d-detached-hud-10 vttBytes=%lu bottomFormat=%d dims=%ux%u c3d=%d c2d=%d target=%p\n",
                 (unsigned long)subtitleVtt.size(),
                 (int)gfxGetScreenFormat(GFX_BOTTOM), bottomW, bottomH,
                 (int)g_hudC3dOk, (int)g_hudC2dOk, (void*)g_playbackHudTarget);
@@ -1105,6 +1105,7 @@ bool playerPlay(const std::string& url, long long runTimeTicks,
         linearFree(g_ring.data); linearFree(pesBuf);
         linearFree(nalBuf); linearFree(audBuf);
         freeFifoSlots();
+        if (g_playbackHudTarget) C3D_RenderTargetDetachOutput(g_playbackHudTarget);
         C2D_Fini(); C3D_Fini(); g_playbackHudTarget = nullptr;
         svcSleepThread(3000000000LL);
         return false;
@@ -1132,6 +1133,7 @@ bool playerPlay(const std::string& url, long long runTimeTicks,
         linearFree(g_ring.data); linearFree(pesBuf);
         linearFree(nalBuf); linearFree(audBuf);
         freeFifoSlots();
+        if (g_playbackHudTarget) C3D_RenderTargetDetachOutput(g_playbackHudTarget);
         C2D_Fini(); C3D_Fini(); g_playbackHudTarget = nullptr;
         svcSleepThread(3000000000LL);
         return false;
@@ -1507,6 +1509,7 @@ bool playerPlay(const std::string& url, long long runTimeTicks,
     linearFree(nalBuf); linearFree(audBuf);
     freeFifoSlots();
     if (seekOut) *seekOut = seekReq;
+    if (g_playbackHudTarget) C3D_RenderTargetDetachOutput(g_playbackHudTarget);
     C2D_Fini();
     C3D_Fini();
     g_playbackHudTarget = nullptr;
