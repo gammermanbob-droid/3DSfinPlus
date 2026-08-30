@@ -538,38 +538,39 @@ static void drawPlaybackHud(double posSec, double durSec, bool paused) {
     u8* fb = gfxGetFramebuffer(GFX_BOTTOM, GFX_LEFT, nullptr, nullptr);
     if (!fb) return;
 
-    // Dedicated dark control deck across the bottom quarter of the touch screen.
-    hudRect(fb, 0, 168, 320, 72, 10, 18, 28);
-    hudRect(fb, 18, 176, 284, 8, 45, 58, 72);
+    // High-contrast control deck. Keep it tall so emulator scaling cannot wash
+    // the controls into the background at small window sizes.
+    hudRect(fb, 0, 118, 320, 122, 18, 42, 68);
+    hudRect(fb, 12, 130, 296, 14, 225, 232, 238);
     double frac = durSec > 0 ? posSec / durSec : 0;
     if (frac < 0) frac = 0;
     if (frac > 1) frac = 1;
-    hudRect(fb, 18, 176, (int)(284 * frac), 8, 38, 210, 190);
+    hudRect(fb, 12, 130, (int)(296 * frac), 14, 0, 235, 205);
 
     // Rewind / forward chevrons.
     for (int i = 0; i < 12; i++) {
-        hudRect(fb, 54 + i, 202 - i, 3, 2 * i + 2, 230, 235, 240);
-        hudRect(fb, 78 + i, 202 - i, 3, 2 * i + 2, 230, 235, 240);
-        hudRect(fb, 239 - i, 202 - i, 3, 2 * i + 2, 230, 235, 240);
-        hudRect(fb, 215 - i, 202 - i, 3, 2 * i + 2, 230, 235, 240);
+        hudRect(fb, 39 + i, 172 - i, 4, 2 * i + 4, 255, 255, 255);
+        hudRect(fb, 67 + i, 172 - i, 4, 2 * i + 4, 255, 255, 255);
+        hudRect(fb, 277 - i, 172 - i, 4, 2 * i + 4, 255, 255, 255);
+        hudRect(fb, 249 - i, 172 - i, 4, 2 * i + 4, 255, 255, 255);
     }
 
     // Centre play/pause button.
-    hudRect(fb, 140, 193, 40, 40, 28, 42, 56);
+    hudRect(fb, 126, 154, 68, 68, 0, 190, 175);
     if (paused) {
         for (int i = 0; i < 14; i++)
-            hudRect(fb, 151 + i, 204 - i / 2, 2, i + 1, 255, 255, 255);
+            hudRect(fb, 145 + i, 174 - i / 2, 3, i + 2, 255, 255, 255);
     } else {
-        hudRect(fb, 151, 203, 6, 20, 255, 255, 255);
-        hudRect(fb, 164, 203, 6, 20, 255, 255, 255);
+        hudRect(fb, 145, 171, 10, 34, 255, 255, 255);
+        hudRect(fb, 165, 171, 10, 34, 255, 255, 255);
     }
 
     // Red B/exit indicator at the far right.
-    hudRect(fb, 286, 198, 24, 28, 132, 32, 42);
-    hudRect(fb, 292, 204, 12, 4, 255, 255, 255);
-    hudRect(fb, 292, 214, 12, 4, 255, 255, 255);
-    hudRect(fb, 292, 204, 4, 14, 255, 255, 255);
-    hudRect(fb, 300, 207, 4, 8, 255, 255, 255);
+    hudRect(fb, 286, 198, 30, 34, 210, 35, 55);
+    hudRect(fb, 293, 205, 15, 5, 255, 255, 255);
+    hudRect(fb, 293, 218, 15, 5, 255, 255, 255);
+    hudRect(fb, 293, 205, 5, 18, 255, 255, 255);
+    hudRect(fb, 304, 209, 5, 10, 255, 255, 255);
 
     GSPGPU_FlushDataCache(fb, 320 * 240 * 3);
 }
