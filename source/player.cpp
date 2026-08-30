@@ -1020,8 +1020,8 @@ bool playerPlay(const std::string& url, long long runTimeTicks,
     // double buffering matches what Azahar presents after each VBlank.
     gfxSetScreenFormat(GFX_BOTTOM, GSP_BGR8_OES);
     gfxSetDoubleBuffering(GFX_BOTTOM, true);
-    consoleInit(GFX_BOTTOM, NULL);
-    consoleClear();
+    // Do not call consoleInit here: it silently changes the bottom framebuffer
+    // to RGB565, while the raw HUD intentionally writes 24-bit BGR pixels.
     if (audioOnly) blitArtwork(artworkData);
     DBG("playerPlay\n");
 
