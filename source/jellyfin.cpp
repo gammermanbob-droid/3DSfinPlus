@@ -284,6 +284,10 @@ std::vector<JellyfinItem> JellyfinClient::getChildren(const std::string& parentI
         item.name           = jStr(obj, "Name");
         item.type           = jStr(obj, "Type");
         item.seriesName     = jStr(obj, "SeriesName");   // present for episodes
+        if (item.type == "Audio" && item.seriesName.empty()) {
+            item.seriesName = jStr(obj, "AlbumArtist");
+            if (item.seriesName.empty()) item.seriesName = jStr(obj, "Album");
+        }
         item.productionYear = 0;
         item.runTimeTicks   = 0;
         item.resumeTicks    = 0;

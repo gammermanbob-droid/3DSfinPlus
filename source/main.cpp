@@ -188,6 +188,7 @@ static AppState     settingsReturn = STATE_ITEMS;
 static int          playAudioIndex = -1;
 static int          playSubtitleIndex = -1; // -1 = subtitles off
 static std::string  playSubtitleVtt;
+static std::string  playArtworkData;
 static std::string  settingsItemId;
 static int          settingsAudioIndex = -1;     // server default
 static int          settingsSubtitleIndex = -1;  // off
@@ -234,6 +235,9 @@ static void preparePlayback(const JellyfinItem& item, AppState returnState) {
                     ? client.getSubtitleVtt(playItem.id,
                                             settingsSubtitleSourceId,
                                             playSubtitleIndex)
+                    : std::string();
+    playArtworkData = item.type == "Audio"
+                    ? client.getPrimaryImage(item.id, 400)
                     : std::string();
     playerUrl = item.type == "Audio"
               ? client.getAudioStreamUrl(item.id, item.resumeTicks)
@@ -692,7 +696,8 @@ int main() {
                                playItem.name,
                                playItem.productionYear,
                                    playStartSec, &seekTo, playSubtitleVtt,
-                                   &finished);
+                                   &finished, playArtworkData,
+                                   playItem.type == "Audio");
                         client.stopTranscode();
                         if (seekTo >= 0) {
                             playStartSec = seekTo;

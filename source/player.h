@@ -18,4 +18,6 @@ bool playerPlay(const std::string& url, long long runTimeTicks = 0,
                 double startSec = 0.0,
                 double* seekOut = nullptr,
                 const std::string& subtitleVtt = "",
-                bool* finishedOut = nullptr);
+                bool* finishedOut = nullptr,
+                const std::string& artworkData = "",
+                bool audioOnly = false);

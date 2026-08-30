@@ -1,5 +1,6 @@
 #include "player.h"
 #include "audio.h"
+#include "stb_image.h"
 #include "http.h"
 #include "aacdec.h"
 #include <3ds.h>
@@ -833,6 +834,7 @@ static void processH264(u8* pes, u32 pesLen,
 // report true playback position for the video pacer's servo.
 static HAACDecoder g_aac = nullptr;
 static double      g_audNextPts = -1.0;   // PTS (sec) of the next ADTS frame decoded
+static bool        g_audioOnly = false;
 // One ADTS frame decodes to at most 2048 samples/channel (1024 LC, doubled by SBR)
 // × 2 channels = 4096 interleaved shorts.
 static short       g_pcm[2048 * 2];
@@ -870,6 +872,11 @@ static void processAAC(unsigned char* buf, int len, FILE* dbg) {
         long long vref = (g_lastBlitPts >= 0) ? g_lastBlitPts : g_vidFirstPts;
         bool stale = (g_audNextPts >= 0.0 && vref >= 0 &&
                       g_audNextPts < vref / 90000.0 - 0.5);
+        // Video pacing throttles the demux naturally. Music has no video clock,
+        // so wait for DSP queue room instead of filling all wave buffers and
+        // dropping the rest of the song in large, audible jumps.
+        while (g_audioOnly && audio::queuedBufs() >= 24)
+            svcSleepThread(5000000LL);
         if (!stale)
             audio::push(g_pcm, spc, fi.nChans, g_audNextPts);
         if (g_audNextPts >= 0.0 && fi.sampRateOut > 0)
@@ -878,13 +885,49 @@ static void processAAC(unsigned char* buf, int len, FILE* dbg) {
     }
 }
 
+static void blitArtwork(const std::string& data) {
+    if (data.empty()) return;
+    int aw = 0, ah = 0, comp = 0;
+    unsigned char* rgba = stbi_load_from_memory(
+        reinterpret_cast<const unsigned char*>(data.data()), (int)data.size(),
+        &aw, &ah, &comp, 4);
+    if (!rgba || aw <= 0 || ah <= 0) {
+        if (rgba) stbi_image_free(rgba);
+        return;
+    }
+
+    const int side = 224;
+    const int left = (400 - side) / 2;
+    const int top  = (240 - side) / 2;
+    for (int pass = 0; pass < 2; pass++) {
+        u8* fb = gfxGetFramebuffer(GFX_TOP, GFX_LEFT, nullptr, nullptr);
+        memset(fb, 0, FB_W * FB_H * 3);
+        for (int y = 0; y < side; y++) {
+            int sy = y * ah / side;
+            for (int x = 0; x < side; x++) {
+                int sx = x * aw / side;
+                const u8* p = rgba + (sy * aw + sx) * 4;
+                int dx = left + x, dy = top + y;
+                u32 off = (dx * FB_W + (FB_W - 1 - dy)) * 3;
+                fb[off] = p[2]; fb[off + 1] = p[1]; fb[off + 2] = p[0];
+            }
+        }
+        GSPGPU_FlushDataCache(fb, FB_W * FB_H * 3);
+        gspWaitForVBlank();
+        gfxScreenSwapBuffers(GFX_TOP, false);
+    }
+    stbi_image_free(rgba);
+}
+
 // ─── Player entry point ───────────────────────────────────────────────────────
 bool playerPlay(const std::string& url, long long runTimeTicks,
                 const std::string& series, const std::string& title, int year,
                 double startSec, double* seekOut,
-                const std::string& subtitleVtt, bool* finishedOut) {
+                const std::string& subtitleVtt, bool* finishedOut,
+                const std::string& artworkData, bool audioOnly) {
     if (seekOut) *seekOut = -1.0;
     if (finishedOut) *finishedOut = false;
+    g_audioOnly = audioOnly;
     // C2D_CreateScreenTarget replaced gfx's framebuffer pointers with its own VRAM
     // allocation. After C3D_Fini that VRAM is freed but the pointers stay stale.
     // gfxSetScreenFormat is a no-op when the format hasn't changed, so it doesn't
@@ -915,12 +958,17 @@ bool playerPlay(const std::string& url, long long runTimeTicks,
     // Azahar can otherwise present the stale Citro2D buffer for one frame,
     // producing a brief striped/error-looking flash during playback startup.
     for (int pass = 0; pass < 2; pass++) {
-        u8* fb = gfxGetFramebuffer(GFX_BOTTOM, GFX_LEFT, nullptr, nullptr);
-        memset(fb, 0, 240 * 320 * 3);
-        GSPGPU_FlushDataCache(fb, 240 * 320 * 3);
+        u16 fbw = 0, fbh = 0;
+        u8* fb = gfxGetFramebuffer(GFX_BOTTOM, GFX_LEFT, &fbw, &fbh);
+        // consoleInit uses RGB565. Clearing it as a three-byte BGR framebuffer
+        // overran the allocation and caused the teal striped screen in Azahar.
+        u32 bytes = (u32)fbw * (u32)fbh * 2;
+        memset(fb, 0, bytes);
+        GSPGPU_FlushDataCache(fb, bytes);
         gspWaitForVBlank();
         gfxScreenSwapBuffers(GFX_BOTTOM, false);
     }
+    if (audioOnly) blitArtwork(artworkData);
     DBG("playerPlay\n");
 
     FILE* dbg = fopen("/3ds/3dsfin/player_debug.txt", "w");
@@ -1275,6 +1323,12 @@ bool playerPlay(const std::string& url, long long runTimeTicks,
             } else if (!g_ring.producerDone && !rebuf) {
                 printf("\x1b[%d;5HBuffering...   ", ROW_STATUS); rebuf = true;
             }
+        }
+
+        // With no video PTS, the DSP clock is the authoritative music position.
+        if (audioOnly && firstPts >= 0) {
+            double clock = audio::audioClock();
+            if (clock >= 0) posSec = startSec + clock - firstPts / 90000.0;
         }
 
         // Refresh the seek bar once per second of playback (skip while the debug
