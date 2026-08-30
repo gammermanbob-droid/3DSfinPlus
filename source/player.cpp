@@ -517,7 +517,10 @@ static std::string hlsResolve(const std::string& base, const std::string& ref) {
 static void flushBottomConsole() {
     u16 w = 0, h = 0;
     u8* fb = gfxGetFramebuffer(GFX_BOTTOM, GFX_LEFT, &w, &h);
-    if (fb) GSPGPU_FlushDataCache(fb, (u32)w * (u32)h * 2);
+    // gfxInitDefault keeps the bottom screen in 24-bit BGR8; consoleInit does
+    // not change that format. Flushing only two bytes per pixel left the final
+    // third of the console buffer cached, so Azahar displayed a blank screen.
+    if (fb) GSPGPU_FlushDataCache(fb, (u32)w * (u32)h * 3);
 }
 
 static int hlsSegmentNumber(const std::string& uri) {
