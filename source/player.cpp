@@ -587,10 +587,7 @@ static void presentPlaybackBottom(double posSec, double durSec, bool paused) {
     // backends advance their writable buffer when queried more than once.
     drawPlaybackHud(fb, posSec, durSec, paused);
     flushBottomConsole();
-    // The HUD is a persistent single-buffer surface. Azahar can present the
-    // clear from one alternating buffer while dropping the controls written to
-    // the other, so never swap the bottom screen during playback.
-    gspWaitForVBlank();
+    gfxScreenSwapBuffers(GFX_BOTTOM, false);
 }
 
 static int hlsSegmentNumber(const std::string& uri) {
@@ -1028,7 +1025,7 @@ bool playerPlay(const std::string& url, long long runTimeTicks,
     // The HUD is fully redrawn into both alternating buffers below. Explicit
     // double buffering matches what Azahar presents after each VBlank.
     gfxSetScreenFormat(GFX_BOTTOM, GSP_RGB565_OES);
-    gfxSetDoubleBuffering(GFX_BOTTOM, false);
+    gfxSetDoubleBuffering(GFX_BOTTOM, true);
     // Do not call consoleInit here: the HUD owns and redraws both bottom buffers.
     if (audioOnly) blitArtwork(artworkData);
     DBG("playerPlay\n");
@@ -1037,7 +1034,7 @@ bool playerPlay(const std::string& url, long long runTimeTicks,
     if (dbg) {
         u16 bottomW = 0, bottomH = 0;
         gfxGetFramebuffer(GFX_BOTTOM, GFX_LEFT, &bottomW, &bottomH);
-        fprintf(dbg, "BUILD=single-buffer-hud-5 vttBytes=%lu bottomFormat=%d dims=%ux%u\n",
+        fprintf(dbg, "BUILD=shared-rgb565-hud-6 vttBytes=%lu bottomFormat=%d dims=%ux%u\n",
                 (unsigned long)subtitleVtt.size(),
                 (int)gfxGetScreenFormat(GFX_BOTTOM), bottomW, bottomH);
         size_t query = url.find('?');
@@ -1161,7 +1158,10 @@ bool playerPlay(const std::string& url, long long runTimeTicks,
     s64       lastBottomRender = -1000;
 
     if (!g_dbg) {
-        presentPlaybackBottom(startSec, durSec, false);
+        for (int pass = 0; pass < 2; pass++) {
+            presentPlaybackBottom(startSec, durSec, false);
+            gspWaitForVBlank();
+        }
     }
 
     // Start the background download thread filling the ring. Same priority as the
