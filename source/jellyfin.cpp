@@ -381,9 +381,73 @@ std::vector<JellyfinAudioTrack> JellyfinClient::getAudioTracks(const std::string
     return result;
 }
 
+std::vector<JellyfinSubtitleTrack> JellyfinClient::getSubtitleTracks(const std::string& itemId) {
+    std::vector<JellyfinSubtitleTrack> result;
+    char path[512];
+    snprintf(path, sizeof(path),
+             "/Users/%s/Items?Ids=%s&Fields=MediaSources&Limit=1",
+             userId_.c_str(), itemId.c_str());
+
+    auto resp = http_.get(path);
+    if (!resp.ok()) return result;
+
+    std::string mediaSources = jArr(resp.body, "MediaSources");
+    std::string source;
+    jForEach(mediaSources, [&](const std::string& obj) {
+        if (source.empty()) source = obj;
+    });
+    std::string sourceId = jStr(source, "Id");
+    std::string streams = jArr(source, "MediaStreams");
+    if (streams.empty()) return result;
+
+    jForEach(streams, [&](const std::string& obj) {
+        if (jStr(obj, "Type") != "Subtitle") return;
+
+        JellyfinSubtitleTrack t;
+        std::string idx = jStr(obj, "Index");
+        if (idx.empty()) return;
+        t.index     = std::stoi(idx);
+        t.mediaSourceId = sourceId;
+        t.title     = jStr(obj, "DisplayTitle");
+        t.language  = jStr(obj, "Language");
+        t.isDefault = jStr(obj, "IsDefault") == "true";
+        t.isForced  = jStr(obj, "IsForced") == "true";
+        if (t.title.empty()) {
+            t.title = t.language.empty() ? jStr(obj, "Codec") : t.language;
+            if (t.title.empty()) t.title = "Subtitle " + std::to_string(t.index);
+        }
+        result.push_back(t);
+    });
+    return result;
+}
+
+std::string JellyfinClient::getSubtitleVtt(const std::string& itemId,
+                                            const std::string& mediaSourceId,
+                                            int streamIndex) {
+    char path[512];
+    snprintf(path, sizeof(path),
+             "/Videos/%s/%s/Subtitles/%d/Stream.vtt"
+             "?CopyTimestamps=true&AddVttTimeMap=false&StartPositionTicks=0",
+             itemId.c_str(), mediaSourceId.c_str(), streamIndex);
+    auto resp = http_.get(path);
+    FILE* dbg = fopen("/3ds/3dsfin/subtitle_debug.txt", "w");
+    if (dbg) {
+        fprintf(dbg, "BUILD=emulator-bottom-subs-3\n");
+        fprintf(dbg, "streamIndex=%d sourceId=%s status=%d result=%08lX stage=%s bytes=%lu\n",
+                streamIndex, mediaSourceId.c_str(), resp.status, (unsigned long)resp.result,
+                httpFailureStageName(resp.failureStage),
+                (unsigned long)resp.body.size());
+        if (!resp.body.empty())
+            fprintf(dbg, "header=%.*s\n", 80, resp.body.c_str());
+        fclose(dbg);
+    }
+    return resp.ok() ? resp.body : std::string();
+}
+
 std::string JellyfinClient::getStreamUrl(const std::string& itemId,
                                          long long startTicks,
-                                         int       audioStreamIndex) {
+                                         int       audioStreamIndex,
+                                         int       subtitleStreamIndex) {
     // Ask Jellyfin to transcode to H.264/AAC at 3DS-friendly resolution.
     // Phase 2: feed this URL to the MVD hardware decoder.
 
@@ -397,8 +461,12 @@ std::string JellyfinClient::getStreamUrl(const std::string& itemId,
 
     char url[1024];
     snprintf(url, sizeof(url),
-             "%s/Videos/%s/stream.ts"
-             "?Container=ts"
+             "%s/Videos/%s/main.m3u8"
+             "?SegmentContainer=ts"
+             "&SegmentLength=3"
+             "&MinSegments=1"
+             "&BreakOnNonKeyFrames=false"
+             "&MediaSourceId=%s"
              "&api_key=%s"
              "&DeviceId=%s"
              "&VideoCodec=h264"
@@ -423,19 +491,24 @@ std::string JellyfinClient::getStreamUrl(const std::string& itemId,
              "&MaxFramerate=24"
              "&MaxWidth=400"
              "&MaxHeight=240"
-             "&SubtitleMethod=None"
+             // Subtitle selection is appended below. Off uses None; a selected
+             // stream uses Encode so Jellyfin burns it into the video.
+             "&SubtitleMethod=%s"
              "&IsPlayback=true"
              // Seek the transcode to the resume position (0 = from the start).
              "&StartTimeTicks=%lld"
              "&PlaySessionId=%s",
-             serverUrl_.c_str(), itemId.c_str(),
-             accessToken_.c_str(), deviceId_.c_str(), startTicks, psid);
+             serverUrl_.c_str(), itemId.c_str(), itemId.c_str(),
+             accessToken_.c_str(), deviceId_.c_str(),
+             subtitleStreamIndex >= 0 ? "Encode" : "None", startTicks, psid);
 
     std::string out(url);
     // Absolute stream index from getAudioTracks(). Omitted entirely when -1 so the
     // server applies its own default-track rules, exactly as before.
     if (audioStreamIndex >= 0)
         out += "&AudioStreamIndex=" + std::to_string(audioStreamIndex);
+    if (subtitleStreamIndex >= 0)
+        out += "&SubtitleStreamIndex=" + std::to_string(subtitleStreamIndex);
     return out;
 }
 

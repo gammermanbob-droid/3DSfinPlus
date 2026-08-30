@@ -59,6 +59,9 @@ public:
     void drawTrackScreen(const std::string& title,
                          const std::vector<std::string>& rows,
                          int selected, int offset);
+    void drawSubtitleScreen(const std::string& title,
+                            const std::vector<std::string>& rows,
+                            int selected, int offset);
 
     void drawPlayerScreen(const JellyfinItem& item, const std::string& streamUrl);
 

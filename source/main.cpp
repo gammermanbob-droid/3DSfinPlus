@@ -17,6 +17,7 @@ enum AppState {
     STATE_LIBRARIES,
     STATE_ITEMS,
     STATE_TRACKS,   // audio-track picker for the item SELECT was pressed on
+    STATE_SUBTITLES,
     STATE_PLAYER,
     STATE_ERROR,
 };
@@ -28,6 +29,7 @@ enum PendingLoad {
     LOAD_ITEMS,   // open a library: list its movies/series
     LOAD_DRILL,   // open a series/season: list its seasons/episodes (see drillKind)
     LOAD_TRACKS,  // fetch an item's audio tracks for the picker
+    LOAD_SUBTITLES,
 };
 
 // ---- Globals ---------------------------------------------------------------
@@ -178,18 +180,35 @@ static std::string playerUrl;
 static JellyfinItem playItem;
 static double       playStartSec = 0.0;
 static AppState     playReturn   = STATE_ITEMS;
+static AppState     settingsReturn = STATE_ITEMS;
 // Audio track chosen in STATE_TRACKS, -1 = let the server pick its default. Kept
 // across the seek loop in STATE_PLAYER so restarting the transcode keeps the track.
 static int          playAudioIndex = -1;
+static int          playSubtitleIndex = -1; // -1 = subtitles off
+static std::string  playSubtitleVtt;
+static std::string  settingsItemId;
+static int          settingsAudioIndex = -1;     // server default
+static int          settingsSubtitleIndex = -1;  // off
+static std::string  settingsSubtitleSourceId;
 // Audio-track picker state (SELECT on a playable item).
 static std::vector<JellyfinAudioTrack> audioTracks;
 static JellyfinItem trackItem;                  // item the picker is for
 static int          selTrack = 0, trackOffset = 0;
+static std::vector<JellyfinSubtitleTrack> subtitleTracks;
+static int          selSubtitle = 0, subtitleOffset = 0; // row 0 is Off
 // Target queued for a LOAD_DRILL (set when A is pressed on a series or season).
 static std::string  drillId, drillTitle;
 static ChildKind    drillKind = ChildKind::Seasons;
 static std::string pendingUsername;
 static std::string pendingPassword;
+
+static void selectSettingsItem(const JellyfinItem& item) {
+    if (settingsItemId == item.id) return;
+    settingsItemId        = item.id;
+    settingsAudioIndex    = -1;
+    settingsSubtitleIndex = -1;
+    settingsSubtitleSourceId.clear();
+}
 
 // ---- Config ----------------------------------------------------------------
 
@@ -264,6 +283,22 @@ int main() {
 
     UI ui(topScreen, botScreen);
 
+    // Automatically authenticate with the existing saved configuration. If the
+    // saved data is incomplete or no longer valid, the normal login flow remains
+    // available as a fallback.
+    if (!cfgServer.empty() && !cfgUsername.empty() && !cfgPassword.empty()) {
+        pendingUsername = cfgUsername;
+        pendingPassword = cfgPassword;
+        loadMsg = "Signing in as " + cfgUsername + "...";
+        pending = LOAD_CONNECT_AND_AUTH;
+        state   = STATE_LOADING;
+        ui.beginFrame();
+        ui.drawLoadingScreen(loadMsg);
+        ui.endFrame();
+    } else if (!cfgServer.empty()) {
+        state = STATE_LOGIN;
+    }
+
     while (aptMainLoop()) {
         hidScanInput();
         u32 kDown = hidKeysDown();
@@ -334,10 +369,26 @@ int main() {
                     audioTracks = client.getAudioTracks(trackItem.id);
                     selTrack    = 0;
                     trackOffset = 0;
-                    // Start on the track the server would have chosen anyway.
-                    for (int i = 0; i < (int)audioTracks.size(); i++)
-                        if (audioTracks[i].isDefault) { selTrack = i; break; }
+                    // Row zero is "Server default"; explicit tracks start at 1.
+                    if (settingsAudioIndex >= 0)
+                        for (int i = 0; i < (int)audioTracks.size(); i++)
+                            if (audioTracks[i].index == settingsAudioIndex) {
+                                selTrack = i + 1; break;
+                            }
                     state = STATE_TRACKS;
+                    break;
+                }
+
+                case LOAD_SUBTITLES: {
+                    subtitleTracks = client.getSubtitleTracks(trackItem.id);
+                    selSubtitle    = 0;
+                    subtitleOffset = 0;
+                    if (settingsSubtitleIndex >= 0)
+                        for (int i = 0; i < (int)subtitleTracks.size(); i++)
+                            if (subtitleTracks[i].index == settingsSubtitleIndex) {
+                                selSubtitle = i + 1; break;
+                            }
+                    state = STATE_SUBTITLES;
                     break;
                 }
 
@@ -393,11 +444,36 @@ int main() {
                         resumeOffset = selResume - UI::RESUME_VISIBLE + 1;
                     if (kDown & KEY_A && rn > 0) {
                         playItem       = resumeItems[selResume];
+                        selectSettingsItem(playItem);
                         playStartSec   = playItem.resumeTicks / 10000000.0;
-                        playAudioIndex = -1;    // server default from the resume strip
-                        playerUrl      = client.getStreamUrl(playItem.id, playItem.resumeTicks);
+                        playAudioIndex = settingsAudioIndex;
+                        playSubtitleIndex = settingsSubtitleIndex;
+                        playSubtitleVtt = playSubtitleIndex >= 0
+                                        ? client.getSubtitleVtt(playItem.id,
+                                                                settingsSubtitleSourceId,
+                                                                playSubtitleIndex)
+                                        : std::string();
+                        playerUrl = client.getStreamUrl(playItem.id, playItem.resumeTicks,
+                                                        playAudioIndex,
+                                                        -1);
                         playReturn     = STATE_LIBRARIES;
                         state          = STATE_PLAYER;
+                    }
+                    if (kDown & KEY_Y && rn > 0) {
+                        trackItem = resumeItems[selResume];
+                        selectSettingsItem(trackItem);
+                        settingsReturn = STATE_LIBRARIES;
+                        loadMsg   = "Loading subtitles...";
+                        pending   = LOAD_SUBTITLES;
+                        state     = STATE_LOADING;
+                    }
+                    if (kDown & KEY_SELECT && rn > 0) {
+                        trackItem = resumeItems[selResume];
+                        selectSettingsItem(trackItem);
+                        settingsReturn = STATE_LIBRARIES;
+                        loadMsg   = "Loading audio tracks...";
+                        pending   = LOAD_TRACKS;
+                        state     = STATE_LOADING;
                     }
                     break;
                 }
@@ -463,9 +539,18 @@ int main() {
                         state      = STATE_LOADING;
                     } else {
                         playItem       = it;
+                        selectSettingsItem(playItem);
                         playStartSec   = it.resumeTicks / 10000000.0;
-                        playAudioIndex = -1;      // A plays with the server's default
-                        playerUrl      = client.getStreamUrl(it.id, it.resumeTicks);
+                        playAudioIndex = settingsAudioIndex;
+                        playSubtitleIndex = settingsSubtitleIndex;
+                        playSubtitleVtt = playSubtitleIndex >= 0
+                                        ? client.getSubtitleVtt(playItem.id,
+                                                                settingsSubtitleSourceId,
+                                                                playSubtitleIndex)
+                                        : std::string();
+                        playerUrl = client.getStreamUrl(it.id, it.resumeTicks,
+                                                        playAudioIndex,
+                                                        -1);
                         playReturn     = STATE_ITEMS;
                         state          = STATE_PLAYER;
                     }
@@ -477,8 +562,21 @@ int main() {
                     JellyfinItem& it = lv.items[lv.sel];
                     if (it.type != "Series" && it.type != "Season") {
                         trackItem = it;
+                        selectSettingsItem(trackItem);
+                        settingsReturn = STATE_ITEMS;
                         loadMsg   = "Loading audio tracks...";
                         pending   = LOAD_TRACKS;
+                        state     = STATE_LOADING;
+                    }
+                }
+                if (kDown & KEY_Y && n > 0) {
+                    JellyfinItem& it = lv.items[lv.sel];
+                    if (it.type != "Series" && it.type != "Season") {
+                        trackItem = it;
+                        selectSettingsItem(trackItem);
+                        settingsReturn = STATE_ITEMS;
+                        loadMsg   = "Loading subtitles...";
+                        pending   = LOAD_SUBTITLES;
                         state     = STATE_LOADING;
                     }
                 }
@@ -486,24 +584,39 @@ int main() {
             }
 
             case STATE_TRACKS: {
-                if (kDown & KEY_B) { state = STATE_ITEMS; break; }
+                if (kDown & KEY_B) { state = settingsReturn; break; }
 
-                int n = (int)audioTracks.size();
+                int n = (int)audioTracks.size() + 1;
                 if (kDown & KEY_DOWN && selTrack < n - 1) selTrack++;
                 if (kDown & KEY_UP   && selTrack > 0)     selTrack--;
                 if (selTrack < trackOffset) trackOffset = selTrack;
                 if (selTrack >= trackOffset + UI::VISIBLE_ROWS)
                     trackOffset = selTrack - UI::VISIBLE_ROWS + 1;
 
-                if (kDown & KEY_A && n > 0) {
-                    playItem       = trackItem;
-                    playStartSec   = trackItem.resumeTicks / 10000000.0;
-                    playAudioIndex = audioTracks[selTrack].index;
-                    playerUrl      = client.getStreamUrl(trackItem.id,
-                                                         trackItem.resumeTicks,
-                                                         playAudioIndex);
-                    playReturn     = STATE_ITEMS;
-                    state          = STATE_PLAYER;
+                if (kDown & KEY_A) {
+                    settingsAudioIndex = selTrack == 0
+                                       ? -1 : audioTracks[selTrack - 1].index;
+                    state = settingsReturn;
+                }
+                break;
+            }
+
+
+            case STATE_SUBTITLES: {
+                if (kDown & KEY_B) { state = settingsReturn; break; }
+                int n = (int)subtitleTracks.size() + 1; // Off + streams
+                if (kDown & KEY_DOWN && selSubtitle < n - 1) selSubtitle++;
+                if (kDown & KEY_UP   && selSubtitle > 0)     selSubtitle--;
+                if (selSubtitle < subtitleOffset) subtitleOffset = selSubtitle;
+                if (selSubtitle >= subtitleOffset + UI::VISIBLE_ROWS)
+                    subtitleOffset = selSubtitle - UI::VISIBLE_ROWS + 1;
+                if (kDown & KEY_A) {
+                    settingsSubtitleIndex = selSubtitle == 0
+                                          ? -1 : subtitleTracks[selSubtitle - 1].index;
+                    settingsSubtitleSourceId = selSubtitle == 0
+                                             ? std::string()
+                                             : subtitleTracks[selSubtitle - 1].mediaSourceId;
+                    state = settingsReturn;
                 }
                 break;
             }
@@ -525,7 +638,7 @@ int main() {
                                playItem.seriesName,
                                playItem.name,
                                playItem.productionYear,
-                               playStartSec, &seekTo);
+                               playStartSec, &seekTo, playSubtitleVtt);
                     // Kill the finished/abandoned transcode job server-side; the
                     // seek's new stream (fresh PlaySessionId) starts its own.
                     client.stopTranscode();
@@ -535,7 +648,7 @@ int main() {
                         // seek would silently drop back to the server's default.
                         playerUrl    = client.getStreamUrl(
                             playItem.id, (long long)(seekTo * 10000000.0),
-                            playAudioIndex);
+                            playAudioIndex, -1);
                     }
                 } while (seekTo >= 0);
 
@@ -601,6 +714,7 @@ int main() {
             }
             case STATE_TRACKS: {
                 std::vector<std::string> rows;
+                rows.push_back("Server default");
                 for (const auto& t : audioTracks) {
                     // Jellyfin's DisplayTitle usually ends in "- Default" already;
                     // only add our own marker when it doesn't say so.
@@ -608,8 +722,20 @@ int main() {
                     rows.push_back(t.isDefault && !marked ? t.title + "   (default)"
                                                           : t.title);
                 }
-                if (rows.empty()) rows.push_back("(no audio tracks found)");
                 ui.drawTrackScreen(trackItem.name, rows, selTrack, trackOffset);
+                break;
+            }
+            case STATE_SUBTITLES: {
+                std::vector<std::string> rows;
+                rows.push_back("Off");
+                for (const auto& t : subtitleTracks) {
+                    std::string row = t.title;
+                    if (t.isForced) row += " [Forced]";
+                    else if (t.isDefault) row += " [Default]";
+                    rows.push_back(row);
+                }
+                ui.drawSubtitleScreen(trackItem.name, rows,
+                                      selSubtitle, subtitleOffset);
                 break;
             }
             case STATE_PLAYER:

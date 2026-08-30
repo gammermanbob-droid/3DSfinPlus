@@ -1,9 +1,12 @@
 #include "player.h"
 #include "audio.h"
+#include "http.h"
 #include "aacdec.h"
 #include <3ds.h>
 #include <cstring>
 #include <cstdio>
+#include <cstdlib>
+#include <vector>
 
 // ─── Dimensions ──────────────────────────────────────────────────────────────
 // VID_W/VID_H are the MAX (output buffer is allocated for these). The actual
@@ -111,11 +114,116 @@ static long long pesPTS(const u8* pay, int sz) {
 // ROW_META and is at most 6 rows (series + blank + 2 title lines + blank +
 // year), so everything below it keeps a fixed row — the bar doesn't shift when
 // a title wraps or a movie has no series name. Text spans cols 5..38.
-static constexpr int ROW_STATUS = 1;    // "Buffering..." / "Seeking..."
-static constexpr int ROW_META   = 3;    // series / title / year, rows 3..8
-static constexpr int ROW_TIME   = 10;   // "MM:SS / MM:SS"    + "B EXIT"
-static constexpr int ROW_BAR    = 12;   // "[####--------]"
-static constexpr int ROW_HINTS  = 13;   // "<< -10s  D-PAD  +30s >>"
+static constexpr int ROW_SUB    = 1;    // bottom-screen subtitles, rows 1..7
+static constexpr int ROW_STATUS = 9;    // "Buffering..." / "Seeking..."
+static constexpr int ROW_META   = 11;   // series / title / year, rows 11..16
+static constexpr int ROW_TIME   = 19;   // "MM:SS / MM:SS"    + "B EXIT"
+static constexpr int ROW_BAR    = 21;   // "[####--------]"
+static constexpr int ROW_HINTS  = 23;   // "<< -10s  D-PAD  +30s >>"
+
+struct SubtitleCue {
+    double start = 0, end = 0;
+    std::string text;
+};
+
+static double parseVttTime(const std::string& s) {
+    int h = 0, m = 0;
+    double sec = 0;
+    if (sscanf(s.c_str(), "%d:%d:%lf", &h, &m, &sec) == 3)
+        return h * 3600.0 + m * 60.0 + sec;
+    if (sscanf(s.c_str(), "%d:%lf", &m, &sec) == 2)
+        return m * 60.0 + sec;
+    return -1;
+}
+
+static std::string cleanVttText(const std::string& in) {
+    std::string out;
+    bool tag = false;
+    for (char c : in) {
+        if (c == '<') { tag = true; continue; }
+        if (c == '>') { tag = false; continue; }
+        if (!tag) out += c;
+    }
+    struct Entity { const char* from; const char* to; } entities[] = {
+        {"&amp;", "&"}, {"&lt;", "<"}, {"&gt;", ">"}, {"&nbsp;", " "}
+    };
+    for (auto& e : entities) {
+        size_t p = 0;
+        while ((p = out.find(e.from, p)) != std::string::npos)
+            out.replace(p, strlen(e.from), e.to);
+    }
+    return out;
+}
+
+static std::vector<SubtitleCue> parseVtt(const std::string& data) {
+    std::vector<SubtitleCue> cues;
+    std::vector<std::string> lines;
+    size_t p = 0;
+    while (p <= data.size()) {
+        size_t e = data.find('\n', p);
+        if (e == std::string::npos) e = data.size();
+        std::string line = data.substr(p, e - p);
+        if (!line.empty() && line.back() == '\r') line.pop_back();
+        lines.push_back(line);
+        if (e == data.size()) break;
+        p = e + 1;
+    }
+    for (size_t i = 0; i < lines.size(); i++) {
+        size_t arrow = lines[i].find("-->");
+        if (arrow == std::string::npos) continue;
+        std::string a = lines[i].substr(0, arrow);
+        std::string b = lines[i].substr(arrow + 3);
+        while (!a.empty() && a.back() == ' ') a.pop_back();
+        while (!b.empty() && b.front() == ' ') b.erase(0, 1);
+        size_t setting = b.find(' ');
+        if (setting != std::string::npos) b.resize(setting);
+        SubtitleCue cue;
+        cue.start = parseVttTime(a);
+        cue.end   = parseVttTime(b);
+        for (++i; i < lines.size() && !lines[i].empty(); i++) {
+            if (!cue.text.empty()) cue.text += '\n';
+            cue.text += cleanVttText(lines[i]);
+        }
+        if (cue.start >= 0 && cue.end > cue.start && !cue.text.empty())
+            cues.push_back(cue);
+    }
+    return cues;
+}
+
+static void drawSubtitle(const std::vector<SubtitleCue>& cues, double posSec) {
+    for (int row = ROW_SUB; row < ROW_SUB + 7; row++)
+        printf("\x1b[%d;1H                                        ", row);
+    const SubtitleCue* active = nullptr;
+    for (const auto& cue : cues) {
+        if (posSec >= cue.start && posSec < cue.end) { active = &cue; break; }
+        if (cue.start > posSec) break;
+    }
+    if (!active) return;
+
+    std::vector<std::string> rows;
+    size_t p = 0;
+    while (p < active->text.size() && rows.size() < 3) {
+        size_t hard = active->text.find('\n', p);
+        size_t end = hard == std::string::npos ? active->text.size() : hard;
+        while (p < end && rows.size() < 3) {
+            size_t take = end - p;
+            if (take > 38) {
+                take = 38;
+                size_t sp = active->text.rfind(' ', p + take);
+                if (sp != std::string::npos && sp > p) take = sp - p;
+            }
+            rows.push_back(active->text.substr(p, take));
+            p += take;
+            while (p < end && active->text[p] == ' ') p++;
+        }
+        p = hard == std::string::npos ? active->text.size() : hard + 1;
+    }
+    int row = ROW_SUB + (6 - (int)rows.size()) / 2;
+    for (const auto& s : rows) {
+        int col = 1 + (40 - (int)s.size()) / 2;
+        printf("\x1b[%d;%dH%s", row++, col, s.c_str());
+    }
+}
 
 static void fmtTime(char* buf, size_t n, double sec) {
     if (sec < 0) sec = 0;
@@ -372,11 +480,11 @@ static void displayPump(bool waitFree, bool drain, bool* stop, FILE* dbg) {
 static constexpr u32 RING_SZ   = 8u * 1024 * 1024;   // ~1.8 min at 0.6 Mbps
 static constexpr u32 RING_MASK = RING_SZ - 1;
 static constexpr u32 PREBUF_SZ = 512u * 1024;        // fill this much before playing
-static constexpr u32 DL_CHUNK  = 128u * 1024;        // bytes per httpcDownloadData call
 
 struct DlRing {
     u8*           data;
-    httpcContext* ctx;
+    std::string   playlistUrl;
+    FILE*         dbg;
     volatile u32  head;          // producer: total bytes written
     volatile u32  tail;          // consumer: total bytes consumed
     volatile bool producerDone;  // stream ended/errored — no more data coming
@@ -392,25 +500,118 @@ static inline u32 ringUsed() {
     return u;
 }
 
-// Producer thread: download HTTP into the ring until the stream ends or the
-// consumer asks us to stop. Mirrors the old loop's "stop when not DOWNLOADPENDING".
+static std::string hlsResolve(const std::string& base, const std::string& ref) {
+    if (ref.compare(0, 7, "http://") == 0 || ref.compare(0, 8, "https://") == 0)
+        return ref;
+    size_t scheme = base.find("://");
+    if (scheme == std::string::npos) return ref;
+    size_t authorityEnd = base.find('/', scheme + 3);
+    std::string origin = authorityEnd == std::string::npos
+                       ? base : base.substr(0, authorityEnd);
+    if (!ref.empty() && ref[0] == '/') return origin + ref;
+    size_t slash = base.rfind('/');
+    return (slash == std::string::npos ? origin + "/" : base.substr(0, slash + 1)) + ref;
+}
+
+static int hlsSegmentNumber(const std::string& uri) {
+    size_t end = uri.find(".ts");
+    if (end == std::string::npos) return -1;
+    size_t slash = uri.rfind('/', end);
+    size_t begin = slash == std::string::npos ? 0 : slash + 1;
+    if (begin >= end) return -1;
+    int value = 0;
+    for (size_t i = begin; i < end; i++) {
+        if (uri[i] < '0' || uri[i] > '9') return -1;
+        value = value * 10 + (uri[i] - '0');
+    }
+    return value;
+}
+
+static bool ringPut(DlRing* r, const u8* src, u32 size) {
+    u32 pos = 0;
+    while (pos < size && !r->consumerStop) {
+        u32 freeb = RING_SZ - ringUsed();
+        if (freeb == 0) { svcSleepThread(2000000LL); continue; }
+        u32 hi = r->head & RING_MASK;
+        u32 n = size - pos;
+        if (n > freeb) n = freeb;
+        u32 contig = RING_SZ - hi;
+        if (n > contig) n = contig;
+        memcpy(r->data + hi, src + pos, n);
+        LightLock_Lock(&r->lock);
+        r->head += n;
+        LightLock_Unlock(&r->lock);
+        pos += n;
+    }
+    return pos == size;
+}
+
+// Azahar buffers each HTTP response before exposing it to the emulated http:C
+// service. Fetch finite HLS TS segments and concatenate them into the ring.
 static void dlThread(void* arg) {
     DlRing* r = (DlRing*)arg;
+    HttpClient http;
+    int lastSegment = -1;
+    unsigned failures = 0;
     while (!r->consumerStop) {
-        u32 freeb = RING_SZ - ringUsed();
-        if (freeb < TS_SZ) { svcSleepThread(2000000LL); continue; }   // full → wait 2ms
-        u32 hi     = r->head & RING_MASK;
-        u32 contig = RING_SZ - hi;                  // contiguous run to end of buffer
-        u32 want   = freeb < contig ? freeb : contig;
-        if (want > DL_CHUNK) want = DL_CHUNK;        // cap per download call
-        u32 got = 0;
-        Result dl = httpcDownloadData(r->ctx, r->data + hi, want, &got);
-        if (got > 0) {
-            LightLock_Lock(&r->lock);
-            r->head += got;
-            LightLock_Unlock(&r->lock);
+        HttpResponse playlist = http.get(r->playlistUrl);
+        if (!playlist.ok()) {
+            if (r->dbg) {
+                fprintf(r->dbg, "HLS playlist fail status=%d result=%08lX stage=%s\n",
+                        playlist.status, (unsigned long)playlist.result,
+                        httpFailureStageName(playlist.failureStage));
+                fflush(r->dbg);
+            }
+            if (++failures >= 6) break;
+            svcSleepThread(2000000000LL);
+            continue;
         }
-        if (dl != (Result)HTTPC_RESULTCODE_DOWNLOADPENDING) break;    // stream finished
+        failures = 0;
+
+        bool endList = playlist.body.find("#EXT-X-ENDLIST") != std::string::npos;
+        bool foundNew = false;
+        bool switchedPlaylist = false;
+        size_t pos = 0;
+        while (pos < playlist.body.size() && !r->consumerStop) {
+            size_t eol = playlist.body.find('\n', pos);
+            if (eol == std::string::npos) eol = playlist.body.size();
+            std::string line = playlist.body.substr(pos, eol - pos);
+            while (!line.empty() && (line.back() == '\r' || line.back() == ' ')) line.pop_back();
+            pos = eol + 1;
+            if (line.empty() || line[0] == '#') continue;
+            if (line.find(".m3u8") != std::string::npos) {
+                r->playlistUrl = hlsResolve(r->playlistUrl, line);
+                switchedPlaylist = true;
+                break;
+            }
+
+            int number = hlsSegmentNumber(line);
+            if (number < 0 || number <= lastSegment) continue;
+            HttpResponse segment = http.get(hlsResolve(r->playlistUrl, line));
+            if (!segment.ok() || segment.body.empty()) {
+                if (r->dbg) {
+                    fprintf(r->dbg, "HLS segment %d fail status=%d result=%08lX\n",
+                            number, segment.status, (unsigned long)segment.result);
+                    fflush(r->dbg);
+                }
+                failures++;
+                break;
+            }
+            if (r->dbg) {
+                fprintf(r->dbg, "HLS segment %d bytes=%lu\n", number,
+                        (unsigned long)segment.body.size());
+                fflush(r->dbg);
+            }
+            if (!ringPut(r, reinterpret_cast<const u8*>(segment.body.data()),
+                         (u32)segment.body.size())) break;
+            lastSegment = number;
+            foundNew = true;
+            failures = 0;
+        }
+        if (switchedPlaylist) continue;
+        if (failures >= 6) break;
+        if (endList && !foundNew) break;
+        if (!foundNew) svcSleepThread(500000000LL);
     }
     r->producerDone = true;
 }
@@ -680,7 +881,8 @@ static void processAAC(unsigned char* buf, int len, FILE* dbg) {
 // ─── Player entry point ───────────────────────────────────────────────────────
 bool playerPlay(const std::string& url, long long runTimeTicks,
                 const std::string& series, const std::string& title, int year,
-                double startSec, double* seekOut) {
+                double startSec, double* seekOut,
+                const std::string& subtitleVtt) {
     if (seekOut) *seekOut = -1.0;
     // C2D_CreateScreenTarget replaced gfx's framebuffer pointers with its own VRAM
     // allocation. After C3D_Fini that VRAM is freed but the pointers stay stale.
@@ -708,12 +910,26 @@ bool playerPlay(const std::string& url, long long runTimeTicks,
     // Bottom-screen console (must come after gfxInitDefault). Stays blank unless
     // debug is toggled on with X + D-Pad Up.
     consoleInit(GFX_BOTTOM, NULL);
+    // Clear both newly-created bottom buffers before the first console draw.
+    // Azahar can otherwise present the stale Citro2D buffer for one frame,
+    // producing a brief striped/error-looking flash during playback startup.
+    for (int pass = 0; pass < 2; pass++) {
+        u8* fb = gfxGetFramebuffer(GFX_BOTTOM, GFX_LEFT, nullptr, nullptr);
+        memset(fb, 0, 240 * 320 * 3);
+        GSPGPU_FlushDataCache(fb, 240 * 320 * 3);
+        gspWaitForVBlank();
+        gfxScreenSwapBuffers(GFX_BOTTOM, false);
+    }
     DBG("playerPlay\n");
 
     FILE* dbg = fopen("/3ds/3dsfin/player_debug.txt", "w");
     if (dbg) {
-        fprintf(dbg, "BUILD=sps-dims-3\n");
-        fprintf(dbg, "URL: %s\n\n", url.c_str());
+        fprintf(dbg, "BUILD=emulator-bottom-subs-autologin-1 vttBytes=%lu\n",
+                (unsigned long)subtitleVtt.size());
+        size_t query = url.find('?');
+        fprintf(dbg, "URL: %.*s%s\n\n",
+                (int)(query == std::string::npos ? url.size() : query),
+                url.c_str(), query == std::string::npos ? "" : "?<redacted>");
         fflush(dbg);
     }
 
@@ -794,41 +1010,7 @@ bool playerPlay(const std::string& url, long long runTimeTicks,
     g_aac = AACInitDecoder();
     DLOG(dbg, "audio: ndsp=%d aacDec=%p\n", (int)audioOn, (void*)g_aac);
 
-    // Open HTTP stream
-    httpcContext ctx;
-    bool    ok         = false;
-    u32     httpStatus = 0;
-    DBG("HTTP open...\n");
-    if (R_SUCCEEDED(httpcOpenContext(&ctx, HTTPC_METHOD_GET, url.c_str(), 1))) {
-        httpcAddRequestHeaderField(&ctx, "User-Agent", "3DSFin/0.2");
-        if (R_SUCCEEDED(httpcBeginRequest(&ctx))) {
-            httpcGetResponseStatusCode(&ctx, &httpStatus);
-            ok = (httpStatus >= 200 && httpStatus < 300);
-        }
-        if (!ok) httpcCloseContext(&ctx);
-    }
-    DBG("HTTP: %u\n", (unsigned)httpStatus);
-    if (dbg) { fprintf(dbg, "HTTP status: %u\n", (unsigned)httpStatus); fflush(dbg); }
-
-    if (!ok) {
-        printf("HTTP fail, B to exit\n");
-        g_paceLog = nullptr;
-        if (dbg) fclose(dbg);
-        AACFreeDecoder(g_aac); g_aac = nullptr;
-        audio::exit();
-        mvdstdExit();
-        linearFree(g_ring.data); linearFree(pesBuf);
-        linearFree(nalBuf); linearFree(audBuf);
-        freeFifoSlots();
-        // Wait for B so user can read the error
-        while (aptMainLoop()) {
-            hidScanInput();
-            if (hidKeysDown() & KEY_B) break;
-        }
-        return false;
-    }
-
-    DBG("Streaming... B=stop\n");
+    DBG("HLS streaming... B=stop\n");
 
     // ─── Decode loop ─────────────────────────────────────────────────────────
     int  pmtPid    = -1;
@@ -855,6 +1037,12 @@ bool playerPlay(const std::string& url, long long runTimeTicks,
     // Seek-bar state: position from PES PTS, total from the Jellyfin item.
     double    durSec      = runTimeTicks > 0 ? runTimeTicks / 10000000.0 : 0.0;
     double    posSec      = startSec;      // resume offset; PTS delta is added below
+    std::vector<SubtitleCue> subtitleCues = parseVtt(subtitleVtt);
+    if (dbg) {
+        fprintf(dbg, "subtitle cues=%lu\n", (unsigned long)subtitleCues.size());
+        fflush(dbg);
+    }
+    int       lastSubtitleTick = -1;
     long long firstPts    = -1;          // PTS of the first frame (position origin)
     long long curPesPts   = -1;          // PTS of the access unit now being accumulated
     int       lastShownSec = -1;         // throttle: redraw bar only when seconds change
@@ -867,7 +1055,8 @@ bool playerPlay(const std::string& url, long long runTimeTicks,
     // Start the background download thread filling the ring. Same priority as the
     // main thread so the two round-robin on the core; the main thread yields often
     // (pacing sleeps, vblank waits), letting the producer keep the ring topped up.
-    g_ring.ctx          = &ctx;
+    g_ring.playlistUrl  = url;
+    g_ring.dbg          = dbg;
     g_ring.head         = 0;
     g_ring.tail         = 0;
     g_ring.producerDone = false;
@@ -1079,6 +1268,12 @@ bool playerPlay(const std::string& url, long long runTimeTicks,
             drawSeekBar(posSec, durSec);
             lastShownSec = (int)posSec;
         }
+        // Four updates per second keeps short cues responsive without repeatedly
+        // repainting the console on every demux pass.
+        if (!g_dbg && (int)(posSec * 4.0) != lastSubtitleTick) {
+            drawSubtitle(subtitleCues, posSec);
+            lastSubtitleTick = (int)(posSec * 4.0);
+        }
 
         // Stream finished and fully drained → done.
         if (g_ring.producerDone && ringUsed() < TS_SZ) break;
@@ -1100,20 +1295,18 @@ bool playerPlay(const std::string& url, long long runTimeTicks,
         fprintf(dbg,"End: pkts=%u pmtPid=%d vidPid=%d dec=%u disp=%u\n",
                 (unsigned)pktCount, pmtPid, vidPid, (unsigned)frameCount,
                 (unsigned)g_dispCount);
-        fclose(dbg);
+        fflush(dbg);
     }
 
     if (seekReq < 0)
         svcSleepThread(2000000000LL); // show stats for 2s before returning
 
-    // Stop the producer: ask it to quit, then cancel any in-flight download so a
-    // blocking httpcDownloadData returns and the thread can exit, then join it.
+    // Stop the producer. HLS responses are finite, so an in-flight request
+    // completes promptly without cancelling a continuous HTTP connection.
     g_ring.consumerStop = true;
-    httpcCancelConnection(&ctx);
-    threadJoin(dlThr, 5000000000LL);
+    threadJoin(dlThr, 15000000000LL);
     threadFree(dlThr);
-
-    httpcCloseContext(&ctx);
+    if (dbg) fclose(dbg);
     AACFreeDecoder(g_aac); g_aac = nullptr;
     audio::exit();
     mvdstdExit();

@@ -27,6 +27,17 @@ struct JellyfinAudioTrack {
     bool        isDefault;  // the track the server would pick on its own
 };
 
+// One selectable subtitle stream. Subtitles are burned into the server-side
+// transcode so text, ASS/SSA styling, and image subtitles all work on the 3DS.
+struct JellyfinSubtitleTrack {
+    int         index;
+    std::string mediaSourceId;
+    std::string title;
+    std::string language;
+    bool        isDefault;
+    bool        isForced;
+};
+
 // Which children to enumerate beneath a parent when browsing.
 enum class ChildKind {
     Direct,             // a library's direct children: Movies or Series, by name
@@ -62,6 +73,14 @@ public:
     // the lookup failed. Used to offer a track picker before starting the stream.
     std::vector<JellyfinAudioTrack> getAudioTracks(const std::string& itemId);
 
+    // The item's embedded/external subtitle streams, in stream order.
+    std::vector<JellyfinSubtitleTrack> getSubtitleTracks(const std::string& itemId);
+
+    // Requests a subtitle as WebVTT for the experimental bottom-screen renderer.
+    std::string getSubtitleVtt(const std::string& itemId,
+                               const std::string& mediaSourceId,
+                               int streamIndex);
+
     // Returns a direct-stream URL pre-configured for 3DS capabilities.
     // startTicks seeks the transcode to a resume position (0 = from the start).
     // audioStreamIndex picks a specific audio track (-1 = let the server choose).
@@ -70,7 +89,8 @@ public:
     // the new StartTimeTicks — which made seeking a no-op.
     std::string getStreamUrl(const std::string& itemId,
                              long long startTicks = 0,
-                             int       audioStreamIndex = -1);
+                             int       audioStreamIndex = -1,
+                             int       subtitleStreamIndex = -1);
 
     // Tells the server to kill the transcode job of the last getStreamUrl()
     // stream. Call between seeks (and after playback) so orphaned ffmpeg jobs

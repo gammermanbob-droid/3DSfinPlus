@@ -56,6 +56,46 @@ Playback:
 ## Current Status
 3DSfin is in very early (alpha) development. Check out release notes for versions in releases tab for the latest updates.
 
+### Emulator HTTPS compatibility
+
+This build supports HTTPS and reverse-proxy endpoints such as ngrok when 3DSfin
+runs under an Azahar-derived emulator on Windows, Android, macOS, or Linux. It:
+
+- configures HTTPS for emulator use;
+- follows up to five HTTP redirects;
+- sends `ngrok-skip-browser-warning` for API and video requests; and
+- paces new HTTPS connections below ngrok Free's per-minute limit; and
+- records the failing HTTP stage and native result code in `player_debug.txt`.
+
+## Subtitles
+
+Press **Y** on a movie or episode to open the subtitle picker. Choose **Off** or
+one of the item's subtitle tracks, then press **A** to save the choice and return.
+Press **SELECT** to choose audio the same way. Playback starts only when **A** is
+pressed on the movie or episode, using both saved choices. Jellyfin burns the
+selected subtitle track into the 400x240 transcode, so embedded, external, styled, and
+image-based subtitles do not need to be decoded by the 3DS. The selection is
+kept when seeking. Subtitle transcoding can take longer to start and uses more
+server CPU than playback with subtitles off.
+
+Subtitle size is controlled by Jellyfin/FFmpeg (and by embedded ASS/SSA styling),
+not by the 3DS player. Jellyfin has no reliable per-playback font-size query that
+works across text, styled, and image subtitle formats.
+
+### Experimental bottom-screen subtitle build
+
+The separately packaged `3dsfin-bottom-subs.3dsx` requests the selected subtitle
+track as WebVTT instead of burning it into the video. It displays up to three
+centered lines in the upper portion of the bottom screen and moves status,
+metadata, seeking, and controls downward. This gives subtitles a consistent,
+readable native-console size and reduces server transcoding work. It is intended
+for text subtitle tracks; styled ASS/SSA formatting and image subtitles cannot be
+preserved by the WebVTT renderer.
+
+Certificate verification is disabled for emulator compatibility. Only connect
+to a private endpoint you control. This mode is not intended for real 3DS
+hardware or untrusted networks.
+
 
 ## Credits
 - thanks to [FourthTube](https://github.com/erievs/FourthTube), for figuring out streaming logic and audio sync issues

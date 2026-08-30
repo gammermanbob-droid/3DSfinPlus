@@ -13,8 +13,8 @@ SOURCES     := source source/aac
 DATA        := data
 INCLUDES    := source source/aac
 
-APP_TITLE       := 3DSFin
-APP_DESCRIPTION := Jellyfin client for 3DS
+APP_TITLE       := 3DSFin Bottom Subs
+APP_DESCRIPTION := Bottom-screen subtitle test
 APP_AUTHOR      := 3DSFin
 
 ARCH    := -march=armv6k -mtune=mpcore -mfloat-abi=hard -mtp=soft

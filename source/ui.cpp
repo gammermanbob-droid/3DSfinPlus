@@ -340,7 +340,7 @@ void UI::drawLibraryGrid(const std::vector<JellyfinLibrary>& libs,
     drawResumeStrip(resume, resumeCovers, resumeSel, resumeOffset, resumeFocus);
 
     if (resumeFocus)
-        drawBottomHints("A: Resume   LEFT/RIGHT: Select   UP: Libraries");
+        drawBottomHints("A: Play  SELECT: Audio  Y: Subtitles");
     else if (!resume.empty())
         drawBottomHints("A: Open   D-Pad: Move   DOWN: Continue Watching");
     else
@@ -425,7 +425,7 @@ void UI::drawItemGrid(const std::vector<JellyfinItem>& items,
     bool drillable = !items.empty() && selected < (int)items.size()
                   && items[selected].type == "Series";
     drawBottomHints(drillable ? "A: Open   B: Back   D-Pad: Move"
-                              : "A: Play   SELECT: Audio   B: Back");
+                              : "A: Play  SELECT: Audio  Y: Subtitles");
 }
 
 void UI::drawTrackScreen(const std::string& title,
@@ -438,8 +438,22 @@ void UI::drawTrackScreen(const std::string& title,
     C2D_SceneBegin(bot_);
     drawRect(0, 0, BOT_W, BOT_H, COL_BG_BOT);
     drawTextBuf(title, 8, 40, 0.50f, COL_WHITE, BOT_W - 16);
-    drawText("Pick the language to stream.", 8, 96, 0.44f, COL_GREY);
-    drawBottomHints("A: Play   B: Back   D-Pad: Move");
+    drawText("Save, then press A on the episode to play.", 8, 96, 0.40f, COL_GREY);
+    drawBottomHints("A: Save   B: Cancel   D-Pad: Move");
+}
+
+void UI::drawSubtitleScreen(const std::string& title,
+                            const std::vector<std::string>& rows,
+                            int selected, int offset) {
+    C2D_SceneBegin(top_);
+    drawTopBar("Subtitles");
+    drawScrollList(rows, selected, offset);
+
+    C2D_SceneBegin(bot_);
+    drawRect(0, 0, BOT_W, BOT_H, COL_BG_BOT);
+    drawTextBuf(title, 8, 40, 0.50f, COL_WHITE, BOT_W - 16);
+    drawText("Jellyfin burns subtitles into the video.", 8, 96, 0.42f, COL_GREY);
+    drawBottomHints("A: Save   B: Cancel   D-Pad: Move");
 }
 
 void UI::drawPlayerScreen(const JellyfinItem& item, const std::string& streamUrl) {
