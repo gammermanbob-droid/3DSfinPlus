@@ -529,8 +529,12 @@ static void hudRect(u8* fb, int x, int y, int w, int h,
     if (y + h > 240) h = 240 - y;
     for (int py = y; py < y + h; py++)
         for (int px = x; px < x + w; px++) {
-            u32 off = (px * 240 + (239 - py)) * 3;
-            fb[off] = b; fb[off + 1] = g; fb[off + 2] = r;
+            // Azahar's bottom-screen presentation path is most reliable in the
+            // native console RGB565 layout. Store the rotated framebuffer pixel
+            // directly instead of relying on its 24-bit BGR conversion path.
+            u32 off = px * 240 + (239 - py);
+            ((u16*)fb)[off] = (u16)(((r >> 3) << 11) |
+                                    ((g >> 2) << 5) | (b >> 3));
         }
 }
 
@@ -571,7 +575,7 @@ static void drawPlaybackHud(u8* fb, double posSec, double durSec, bool paused) {
     hudRect(fb, 293, 205, 5, 18, 255, 255, 255);
     hudRect(fb, 304, 209, 5, 10, 255, 255, 255);
 
-    GSPGPU_FlushDataCache(fb, 320 * 240 * 3);
+    GSPGPU_FlushDataCache(fb, 320 * 240 * 2);
 }
 
 static void presentPlaybackBottom(double posSec, double durSec, bool paused) {
@@ -1020,10 +1024,9 @@ bool playerPlay(const std::string& url, long long runTimeTicks,
 
     // The HUD is fully redrawn into both alternating buffers below. Explicit
     // double buffering matches what Azahar presents after each VBlank.
-    gfxSetScreenFormat(GFX_BOTTOM, GSP_BGR8_OES);
+    gfxSetScreenFormat(GFX_BOTTOM, GSP_RGB565_OES);
     gfxSetDoubleBuffering(GFX_BOTTOM, true);
-    // Do not call consoleInit here: it silently changes the bottom framebuffer
-    // to RGB565, while the raw HUD intentionally writes 24-bit BGR pixels.
+    // Do not call consoleInit here: the HUD owns and redraws both bottom buffers.
     if (audioOnly) blitArtwork(artworkData);
     DBG("playerPlay\n");
 
@@ -1031,7 +1034,7 @@ bool playerPlay(const std::string& url, long long runTimeTicks,
     if (dbg) {
         u16 bottomW = 0, bottomH = 0;
         gfxGetFramebuffer(GFX_BOTTOM, GFX_LEFT, &bottomW, &bottomH);
-        fprintf(dbg, "BUILD=shared-raw-hud-3 vttBytes=%lu bottomFormat=%d dims=%ux%u\n",
+        fprintf(dbg, "BUILD=shared-rgb565-hud-4 vttBytes=%lu bottomFormat=%d dims=%ux%u\n",
                 (unsigned long)subtitleVtt.size(),
                 (int)gfxGetScreenFormat(GFX_BOTTOM), bottomW, bottomH);
         size_t query = url.find('?');
