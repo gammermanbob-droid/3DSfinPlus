@@ -534,8 +534,7 @@ static void hudRect(u8* fb, int x, int y, int w, int h,
         }
 }
 
-static void drawPlaybackHud(double posSec, double durSec, bool paused) {
-    u8* fb = gfxGetFramebuffer(GFX_BOTTOM, GFX_LEFT, nullptr, nullptr);
+static void drawPlaybackHud(u8* fb, double posSec, double durSec, bool paused) {
     if (!fb) return;
 
     // High-contrast control deck. Keep it tall so emulator scaling cannot wash
@@ -580,7 +579,9 @@ static void presentPlaybackBottom(double posSec, double durSec, bool paused) {
     // Clear and redraw the entire back buffer ourselves. PrintConsole caches a
     // framebuffer pointer and was clearing the just-presented HUD after swaps.
     hudRect(fb, 0, 0, 320, 240, 6, 12, 20);
-    drawPlaybackHud(posSec, durSec, paused);
+    // Use the same pointer for the background and every control. Some emulator
+    // backends advance their writable buffer when queried more than once.
+    drawPlaybackHud(fb, posSec, durSec, paused);
     flushBottomConsole();
     gfxScreenSwapBuffers(GFX_BOTTOM, false);
 }
@@ -1030,7 +1031,7 @@ bool playerPlay(const std::string& url, long long runTimeTicks,
     if (dbg) {
         u16 bottomW = 0, bottomH = 0;
         gfxGetFramebuffer(GFX_BOTTOM, GFX_LEFT, &bottomW, &bottomH);
-        fprintf(dbg, "BUILD=shared-raw-hud-1 vttBytes=%lu bottomFormat=%d dims=%ux%u\n",
+        fprintf(dbg, "BUILD=shared-raw-hud-3 vttBytes=%lu bottomFormat=%d dims=%ux%u\n",
                 (unsigned long)subtitleVtt.size(),
                 (int)gfxGetScreenFormat(GFX_BOTTOM), bottomW, bottomH);
         size_t query = url.find('?');
