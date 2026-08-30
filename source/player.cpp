@@ -595,7 +595,8 @@ static void drawPlaybackHud(u8* fb, double posSec, double durSec, bool paused) {
     GSPGPU_FlushDataCache(fb, 320 * 240 * 3);
 }
 
-static void presentPlaybackBottom(double posSec, double durSec, bool paused) {
+static void presentPlaybackBottom(double posSec, double durSec, bool paused,
+                                  const std::vector<SubtitleCue>* cues = nullptr) {
     if (g_playbackHudTarget) {
         double frac = durSec > 0 ? posSec / durSec : 0;
         if (frac < 0) frac = 0;
@@ -606,9 +607,10 @@ static void presentPlaybackBottom(double posSec, double durSec, bool paused) {
         if (g_hudTextBuf) C2D_TextBufClear(g_hudTextBuf);
         C2D_TargetClear(g_playbackHudTarget, C2D_Color32(6, 12, 20, 255));
         C2D_SceneBegin(g_playbackHudTarget);
-        C2D_DrawRectSolid(0, 0, 0, 320, 34, C2D_Color32(15, 60, 120, 255));
-        C2D_DrawRectSolid(12, 62, 0, 296, 10, C2D_Color32(65, 78, 96, 255));
-        C2D_DrawRectSolid(12, 62, 0, 296 * frac, 10, C2D_Color32(0, 235, 205, 255));
+        // Lyrics own the upper half; playback controls stay in a compact deck.
+        C2D_DrawRectSolid(0, 116, 0, 320, 124, C2D_Color32(18, 42, 68, 255));
+        C2D_DrawRectSolid(12, 124, 0, 296, 8, C2D_Color32(65, 78, 96, 255));
+        C2D_DrawRectSolid(12, 124, 0, 296 * frac, 8, C2D_Color32(0, 235, 205, 255));
 
         auto text = [](const char* s, float x, float y, float scale, u32 color) {
             if (!g_hudFont || !g_hudTextBuf) return;
@@ -617,29 +619,61 @@ static void presentPlaybackBottom(double posSec, double durSec, bool paused) {
             C2D_TextOptimize(&t);
             C2D_DrawText(&t, C2D_WithColor, x, y, 0.5f, scale, scale, color);
         };
-        text("NOW PLAYING", 10, 8, 0.52f, C2D_Color32(255,255,255,255));
-        if (g_hudLeft.tex)
-            C2D_DrawImageAt(g_hudLeft, 18, 92, 0.2f, nullptr, 0.94f, 0.94f);
-        if (g_hudRight.tex)
-            C2D_DrawImageAt(g_hudRight, 238, 92, 0.2f, nullptr, 0.94f, 0.94f);
-
-        C2D_DrawCircleSolid(160, 122, 0.1f, 36, C2D_Color32(0, 190, 175, 255));
-        if (paused) {
-            C2D_DrawTriangle(150, 105, C2D_Color32(255,255,255,255),
-                             150, 139, C2D_Color32(255,255,255,255),
-                             178, 122, C2D_Color32(255,255,255,255), 0.2f);
-        } else {
-            C2D_DrawRectSolid(149, 105, 0.2f, 9, 34, C2D_Color32(255,255,255,255));
-            C2D_DrawRectSolid(166, 105, 0.2f, 9, 34, C2D_Color32(255,255,255,255));
+        std::string lyric;
+        if (cues) {
+            for (const auto& cue : *cues) {
+                if (posSec >= cue.start && posSec <= cue.end) {
+                    lyric = cue.text;
+                    break;
+                }
+            }
         }
-        text("A", 154, 145, 0.48f, C2D_Color32(255,255,255,255));
-        text(paused ? "PLAY" : "PAUSE", paused ? 140 : 135, 169, 0.42f,
+        if (!lyric.empty()) {
+            size_t p = 0;
+            int row = 0;
+            while (p < lyric.size() && row < 4) {
+                size_t end = lyric.find('\n', p);
+                if (end == std::string::npos) end = lyric.size();
+                while (end - p > 34 && row < 4) {
+                    size_t cut = lyric.rfind(' ', p + 34);
+                    if (cut == std::string::npos || cut < p) cut = p + 34;
+                    std::string line = lyric.substr(p, cut - p);
+                    text(line.c_str(), 10, 12 + row++ * 23, 0.46f,
+                         C2D_Color32(255,255,255,255));
+                    p = cut + (cut < lyric.size() && lyric[cut] == ' ');
+                }
+                if (row < 4 && end > p) {
+                    std::string line = lyric.substr(p, end - p);
+                    text(line.c_str(), 10, 12 + row++ * 23, 0.46f,
+                         C2D_Color32(255,255,255,255));
+                }
+                p = end + 1;
+            }
+        } else {
+            text("Lyrics will appear here", 74, 48, 0.42f,
+                 C2D_Color32(135,155,175,255));
+        }
+        if (g_hudLeft.tex)
+            C2D_DrawImageAt(g_hudLeft, 22, 143, 0.2f, nullptr, 0.72f, 0.72f);
+        if (g_hudRight.tex)
+            C2D_DrawImageAt(g_hudRight, 236, 143, 0.2f, nullptr, 0.72f, 0.72f);
+
+        C2D_DrawCircleSolid(160, 164, 0.1f, 29, C2D_Color32(0, 190, 175, 255));
+        if (paused) {
+            C2D_DrawTriangle(152, 150, C2D_Color32(255,255,255,255),
+                             152, 178, C2D_Color32(255,255,255,255),
+                             175, 164, C2D_Color32(255,255,255,255), 0.2f);
+        } else {
+            C2D_DrawRectSolid(150, 150, 0.2f, 8, 28, C2D_Color32(255,255,255,255));
+            C2D_DrawRectSolid(164, 150, 0.2f, 8, 28, C2D_Color32(255,255,255,255));
+        }
+        text(paused ? "A  PLAY" : "A  PAUSE", paused ? 137 : 132, 199, 0.40f,
              C2D_Color32(210,225,235,255));
-        text("-10 SEC", 22, 164, 0.38f, C2D_Color32(210,225,235,255));
-        text("+30 SEC", 242, 164, 0.38f, C2D_Color32(210,225,235,255));
+        text("-10s", 30, 198, 0.38f, C2D_Color32(210,225,235,255));
+        text("+30s", 244, 198, 0.38f, C2D_Color32(210,225,235,255));
         if (g_hudB.tex)
-            C2D_DrawImageAt(g_hudB, 255, 187, 0.2f, nullptr, 0.92f, 0.92f);
-        text("BACK", 284, 203, 0.38f, C2D_Color32(255,255,255,255));
+            C2D_DrawImageAt(g_hudB, 277, 202, 0.2f, nullptr, 0.70f, 0.70f);
+        text("BACK", 237, 216, 0.36f, C2D_Color32(255,255,255,255));
         C3D_FrameEnd(0);
         return;
     }
@@ -1122,7 +1156,7 @@ bool playerPlay(const std::string& url, long long runTimeTicks,
     if (dbg) {
         u16 bottomW = 0, bottomH = 0;
         gfxGetFramebuffer(GFX_BOTTOM, GFX_LEFT, &bottomW, &bottomH);
-        fprintf(dbg, "BUILD=polished-assets-hud-13 vttBytes=%lu bottomFormat=%d dims=%ux%u c3d=%d c2d=%d target=%p frameTry=%d frameOk=%d\n",
+        fprintf(dbg, "BUILD=lyrics-layout-hud-14 vttBytes=%lu bottomFormat=%d dims=%ux%u c3d=%d c2d=%d target=%p frameTry=%d frameOk=%d\n",
                 (unsigned long)subtitleVtt.size(),
                 (int)gfxGetScreenFormat(GFX_BOTTOM), bottomW, bottomH,
                 (int)g_hudC3dOk, (int)g_hudC2dOk, (void*)g_playbackHudTarget,
@@ -1266,7 +1300,7 @@ bool playerPlay(const std::string& url, long long runTimeTicks,
 
     if (!g_dbg) {
         for (int pass = 0; pass < 2; pass++) {
-            presentPlaybackBottom(startSec, durSec, false);
+            presentPlaybackBottom(startSec, durSec, false, &subtitleCues);
             gspWaitForVBlank();
         }
     }
@@ -1372,7 +1406,7 @@ bool playerPlay(const std::string& url, long long runTimeTicks,
         if (paused) {
             s64 pausedNow = (s64)osGetTime();
             if (!g_dbg && pausedNow - lastBottomRender >= 66) {
-                presentPlaybackBottom(posSec, durSec, true);
+                presentPlaybackBottom(posSec, durSec, true, &subtitleCues);
                 lastBottomRender = pausedNow;
             }
             svcSleepThread(30000000LL);
@@ -1522,7 +1556,7 @@ bool playerPlay(const std::string& url, long long runTimeTicks,
         // untouched alternate buffer, making the HUD flash and vanish.
         s64 renderNow = (s64)osGetTime();
         if (!g_dbg && renderNow - lastBottomRender >= 66) {
-            presentPlaybackBottom(posSec, durSec, paused);
+            presentPlaybackBottom(posSec, durSec, paused, &subtitleCues);
             lastBottomRender = renderNow;
         }
 
