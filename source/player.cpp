@@ -28,6 +28,7 @@ static u32 g_decW = VID_W, g_decH = VID_H;
 static bool g_dbg = false;
 static C3D_RenderTarget* g_playbackHudTarget = nullptr;
 static bool g_hudC3dOk = false, g_hudC2dOk = false;
+static bool g_hudFrameAttempted = false, g_hudFrameAccepted = false;
 #define DBG(...) do { if (g_dbg) printf(__VA_ARGS__); } while (0)
 
 // ─── Buffer sizes ─────────────────────────────────────────────────────────────
@@ -582,7 +583,9 @@ static void presentPlaybackBottom(double posSec, double durSec, bool paused) {
         double frac = durSec > 0 ? posSec / durSec : 0;
         if (frac < 0) frac = 0;
         if (frac > 1) frac = 1;
-        C3D_FrameBegin(C3D_FRAME_SYNCDRAW);
+        g_hudFrameAttempted = true;
+        if (!C3D_FrameBegin(C3D_FRAME_SYNCDRAW)) return;
+        g_hudFrameAccepted = true;
         C2D_TargetClear(g_playbackHudTarget, C2D_Color32(6, 12, 20, 255));
         C2D_SceneBegin(g_playbackHudTarget);
         C2D_DrawRectSolid(0, 118, 0, 320, 122, C2D_Color32(18, 42, 68, 255));
@@ -1066,6 +1069,11 @@ bool playerPlay(const std::string& url, long long runTimeTicks,
                                       GX_TRANSFER_OUT_FORMAT(GX_TRANSFER_FMT_RGB8) |
                                       GX_TRANSFER_SCALING(GX_TRANSFER_SCALE_NO));
     }
+    g_hudFrameAttempted = false;
+    g_hudFrameAccepted = false;
+    presentPlaybackBottom(startSec,
+                          runTimeTicks > 0 ? runTimeTicks / 10000000.0 : 0.0,
+                          false);
     if (audioOnly) blitArtwork(artworkData);
     DBG("playerPlay\n");
 
@@ -1073,10 +1081,11 @@ bool playerPlay(const std::string& url, long long runTimeTicks,
     if (dbg) {
         u16 bottomW = 0, bottomH = 0;
         gfxGetFramebuffer(GFX_BOTTOM, GFX_LEFT, &bottomW, &bottomH);
-        fprintf(dbg, "BUILD=audio-no-mvd-hud-11 vttBytes=%lu bottomFormat=%d dims=%ux%u c3d=%d c2d=%d target=%p\n",
+        fprintf(dbg, "BUILD=early-citro2d-hud-12 vttBytes=%lu bottomFormat=%d dims=%ux%u c3d=%d c2d=%d target=%p frameTry=%d frameOk=%d\n",
                 (unsigned long)subtitleVtt.size(),
                 (int)gfxGetScreenFormat(GFX_BOTTOM), bottomW, bottomH,
-                (int)g_hudC3dOk, (int)g_hudC2dOk, (void*)g_playbackHudTarget);
+                (int)g_hudC3dOk, (int)g_hudC2dOk, (void*)g_playbackHudTarget,
+                (int)g_hudFrameAttempted, (int)g_hudFrameAccepted);
         size_t query = url.find('?');
         fprintf(dbg, "URL: %.*s%s\n\n",
                 (int)(query == std::string::npos ? url.size() : query),
