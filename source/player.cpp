@@ -27,6 +27,7 @@ static u32 g_decW = VID_W, g_decH = VID_H;
 // player_debug.txt is independent of this flag. DBG() prints only when enabled.
 static bool g_dbg = false;
 static C3D_RenderTarget* g_playbackHudTarget = nullptr;
+static bool g_hudC3dOk = false, g_hudC2dOk = false;
 #define DBG(...) do { if (g_dbg) printf(__VA_ARGS__); } while (0)
 
 // ─── Buffer sizes ─────────────────────────────────────────────────────────────
@@ -1051,10 +1052,20 @@ bool playerPlay(const std::string& url, long long runTimeTicks,
     gfxSetScreenFormat(GFX_BOTTOM, GSP_BGR8_OES);
     gfxSetDoubleBuffering(GFX_BOTTOM, true);
     // Do not call consoleInit here: the HUD owns and redraws both bottom buffers.
-    C3D_Init(C3D_DEFAULT_CMDBUF_SIZE);
-    C2D_Init(C2D_DEFAULT_MAX_OBJECTS);
-    C2D_Prepare();
-    g_playbackHudTarget = C2D_CreateScreenTarget(GFX_BOTTOM, GFX_LEFT);
+    g_hudC3dOk = C3D_Init(C3D_DEFAULT_CMDBUF_SIZE);
+    g_hudC2dOk = g_hudC3dOk && C2D_Init(C2D_DEFAULT_MAX_OBJECTS);
+    if (g_hudC2dOk) {
+        C2D_Prepare();
+        g_playbackHudTarget = C2D_CreateScreenTarget(GFX_BOTTOM, GFX_LEFT);
+        if (g_playbackHudTarget)
+            C3D_RenderTargetSetOutput(g_playbackHudTarget, GFX_BOTTOM, GFX_LEFT,
+                                      GX_TRANSFER_FLIP_VERT(0) |
+                                      GX_TRANSFER_OUT_TILED(0) |
+                                      GX_TRANSFER_RAW_COPY(0) |
+                                      GX_TRANSFER_IN_FORMAT(GX_TRANSFER_FMT_RGBA8) |
+                                      GX_TRANSFER_OUT_FORMAT(GX_TRANSFER_FMT_RGB8) |
+                                      GX_TRANSFER_SCALING(GX_TRANSFER_SCALE_NO));
+    }
     if (audioOnly) blitArtwork(artworkData);
     DBG("playerPlay\n");
 
@@ -1062,9 +1073,10 @@ bool playerPlay(const std::string& url, long long runTimeTicks,
     if (dbg) {
         u16 bottomW = 0, bottomH = 0;
         gfxGetFramebuffer(GFX_BOTTOM, GFX_LEFT, &bottomW, &bottomH);
-        fprintf(dbg, "BUILD=citro2d-hud-8 vttBytes=%lu bottomFormat=%d dims=%ux%u\n",
+        fprintf(dbg, "BUILD=citro2d-bound-hud-9 vttBytes=%lu bottomFormat=%d dims=%ux%u c3d=%d c2d=%d target=%p\n",
                 (unsigned long)subtitleVtt.size(),
-                (int)gfxGetScreenFormat(GFX_BOTTOM), bottomW, bottomH);
+                (int)gfxGetScreenFormat(GFX_BOTTOM), bottomW, bottomH,
+                (int)g_hudC3dOk, (int)g_hudC2dOk, (void*)g_playbackHudTarget);
         size_t query = url.find('?');
         fprintf(dbg, "URL: %.*s%s\n\n",
                 (int)(query == std::string::npos ? url.size() : query),
