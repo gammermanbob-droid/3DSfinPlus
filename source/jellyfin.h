@@ -44,6 +44,7 @@ enum class ChildKind {
     Seasons,            // a series' seasons, ordered by season number
     Episodes,           // a season's episodes, ordered by episode number
     EpisodesRecursive,  // every episode beneath a series, flattened (seasonless fallback)
+    PlayableRecursive,  // every movie, episode, or song beneath a folder/library
 };
 
 class JellyfinClient {
@@ -91,6 +92,11 @@ public:
                              long long startTicks = 0,
                              int       audioStreamIndex = -1,
                              int       subtitleStreamIndex = -1);
+
+    // Audio-only HLS/AAC stream for Jellyfin music items. It uses the same TS
+    // demux and Helix AAC decoder as video playback, without requiring H.264.
+    std::string getAudioStreamUrl(const std::string& itemId,
+                                  long long startTicks = 0);
 
     // Tells the server to kill the transcode job of the last getStreamUrl()
     // stream. Call between seeks (and after playback) so orphaned ffmpeg jobs

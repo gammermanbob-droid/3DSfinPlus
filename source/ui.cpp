@@ -421,11 +421,22 @@ void UI::drawItemGrid(const std::vector<JellyfinItem>& items,
         drawText("Type: " + it.type, 8, 92, 0.48f, COL_GREY);
     }
 
-    // Series drill in, everything else plays.
+    // Series, seasons, artists, albums, and folders drill in; media plays.
     bool drillable = !items.empty() && selected < (int)items.size()
-                  && items[selected].type == "Series";
-    drawBottomHints(drillable ? "A: Open   B: Back   D-Pad: Move"
-                              : "A: Play  SELECT: Audio  Y: Subtitles");
+                  && (items[selected].type == "Series" ||
+                      items[selected].type == "Season" ||
+                      items[selected].type == "MusicArtist" ||
+                      items[selected].type == "MusicAlbum" ||
+                      items[selected].type == "Artist" ||
+                      items[selected].type == "Album" ||
+                      items[selected].type == "Folder" ||
+                      items[selected].type == "Playlist" ||
+                      items[selected].type == "BoxSet");
+    bool music = !items.empty() && selected < (int)items.size()
+              && items[selected].type == "Audio";
+    drawBottomHints(drillable ? "A: Open   X: Shuffle   B: Back"
+                    : music ? "A: Play   X: Shuffle   B: Back"
+                            : "A: Play  X: Shuffle  SELECT/Y: Tracks");
 }
 
 void UI::drawTrackScreen(const std::string& title,

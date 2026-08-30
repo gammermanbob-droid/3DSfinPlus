@@ -882,8 +882,9 @@ static void processAAC(unsigned char* buf, int len, FILE* dbg) {
 bool playerPlay(const std::string& url, long long runTimeTicks,
                 const std::string& series, const std::string& title, int year,
                 double startSec, double* seekOut,
-                const std::string& subtitleVtt) {
+                const std::string& subtitleVtt, bool* finishedOut) {
     if (seekOut) *seekOut = -1.0;
+    if (finishedOut) *finishedOut = false;
     // C2D_CreateScreenTarget replaced gfx's framebuffer pointers with its own VRAM
     // allocation. After C3D_Fini that VRAM is freed but the pointers stay stale.
     // gfxSetScreenFormat is a no-op when the format hasn't changed, so it doesn't
@@ -1182,9 +1183,13 @@ bool playerPlay(const std::string& url, long long runTimeTicks,
                     DBG("PAT->pmtPid=%d\n", pmtPid);
                     if (dbg) { fprintf(dbg,"PAT pmtPid=%d\n",pmtPid); fflush(dbg); }
                 }
-            } else if (pmtPid!=-1 && pid==pmtPid && pay && vidPid==-1) {
-                vidPid = parsePMT(pay, psz, &audPid);
-                if (vidPid!=-1) {
+            } else if (pmtPid!=-1 && pid==pmtPid && pay &&
+                       (vidPid==-1 || audPid==-1)) {
+                int foundAudio = -1;
+                int foundVideo = parsePMT(pay, psz, &foundAudio);
+                if (foundVideo >= 0) vidPid = foundVideo;
+                if (foundAudio >= 0) audPid = foundAudio;
+                if (vidPid!=-1 || audPid!=-1) {
                     DBG("PMT->vidPid=%d audPid=%d\n", vidPid, audPid);
                     if (dbg) { fprintf(dbg,"PMT vidPid=%d audPid=%d\n",vidPid,audPid); fflush(dbg); }
                 }
@@ -1198,7 +1203,17 @@ bool playerPlay(const std::string& url, long long runTimeTicks,
                     // here; re-syncs g_audNextPts each PES so per-frame accumulation
                     // error (or dropped/corrupt frames) can't build up.
                     long long apts = pesPTS(pay, psz);
-                    if (apts >= 0) g_audNextPts = apts / 90000.0;
+                    if (apts >= 0) {
+                        g_audNextPts = apts / 90000.0;
+                        // Audio-only music has no video PTS to drive the seek bar.
+                        // Anchor it to the first audio PES instead.
+                        if (vidPid < 0) {
+                            if (firstPts < 0) firstPts = apts;
+                            long long d = apts - firstPts;
+                            if (d < 0) d += (1LL << 33);
+                            posSec = startSec + d / 90000.0;
+                        }
+                    }
                     int skip = pesHeaderLen(pay, psz);
                     audLen = 0; audActive = true;
                     int cp = psz - skip;
@@ -1243,7 +1258,7 @@ bool playerPlay(const std::string& url, long long runTimeTicks,
 
         // Display any frames that came due (also keeps video moving through
         // network stalls, when the batch loop above has nothing to decode).
-        displayPump(false, false, &stop, dbg);
+        if (vidPid >= 0) displayPump(false, false, &stop, dbg);
 
         // One-time note when the download stream ends — distinguishes a normal
         // end-of-file from the server silently stopping mid-stream (throttling).
@@ -1287,7 +1302,12 @@ bool playerPlay(const std::string& url, long long runTimeTicks,
 
     // Show whatever is still queued at its proper pace before tearing down —
     // unless the user is seeking away, in which case just drop it.
-    if (!stop && seekReq < 0) displayPump(false, true, &stop, dbg);
+    if (audActive && audLen > 0) processAAC(audBuf, (int)audLen, dbg);
+    if (!stop && seekReq < 0 && vidPid >= 0)
+        displayPump(false, true, &stop, dbg);
+
+    if (finishedOut)
+        *finishedOut = seekReq < 0 && g_ring.producerDone && ringUsed() < TS_SZ;
 
     DBG("End: pkts=%u frms=%u\n", (unsigned)pktCount, (unsigned)frameCount);
     g_paceLog = nullptr;

@@ -2,6 +2,7 @@
 #include <citro2d.h>
 #include <string>
 #include <cstdio>
+#include <cstdlib>
 #include <sys/stat.h>
 #include "jellyfin.h"
 #include "ui.h"
@@ -30,6 +31,7 @@ enum PendingLoad {
     LOAD_DRILL,   // open a series/season: list its seasons/episodes (see drillKind)
     LOAD_TRACKS,  // fetch an item's audio tracks for the picker
     LOAD_SUBTITLES,
+    LOAD_SHUFFLE, // recursively collect playable items beneath the current level
 };
 
 // ---- Globals ---------------------------------------------------------------
@@ -201,6 +203,10 @@ static std::string  drillId, drillTitle;
 static ChildKind    drillKind = ChildKind::Seasons;
 static std::string pendingUsername;
 static std::string pendingPassword;
+static std::string shuffleParentId;
+static std::vector<JellyfinItem> shuffleQueue;
+static size_t shuffleIndex = 0;
+static bool shuffleActive = false;
 
 static void selectSettingsItem(const JellyfinItem& item) {
     if (settingsItemId == item.id) return;
@@ -208,6 +214,43 @@ static void selectSettingsItem(const JellyfinItem& item) {
     settingsAudioIndex    = -1;
     settingsSubtitleIndex = -1;
     settingsSubtitleSourceId.clear();
+}
+
+static bool isContainer(const JellyfinItem& item) {
+    return item.type == "Series" || item.type == "Season" ||
+           item.type == "MusicArtist" || item.type == "MusicAlbum" ||
+           item.type == "Artist" || item.type == "Album" ||
+           item.type == "Folder" || item.type == "Playlist" ||
+           item.type == "BoxSet";
+}
+
+static void preparePlayback(const JellyfinItem& item, AppState returnState) {
+    playItem = item;
+    selectSettingsItem(playItem);
+    playStartSec = item.resumeTicks / 10000000.0;
+    playAudioIndex = settingsAudioIndex;
+    playSubtitleIndex = item.type == "Audio" ? -1 : settingsSubtitleIndex;
+    playSubtitleVtt = playSubtitleIndex >= 0
+                    ? client.getSubtitleVtt(playItem.id,
+                                            settingsSubtitleSourceId,
+                                            playSubtitleIndex)
+                    : std::string();
+    playerUrl = item.type == "Audio"
+              ? client.getAudioStreamUrl(item.id, item.resumeTicks)
+              : client.getStreamUrl(item.id, item.resumeTicks,
+                                    playAudioIndex, -1);
+    playReturn = returnState;
+    state = STATE_PLAYER;
+}
+
+static void shuffleItems(std::vector<JellyfinItem>& items) {
+    if (items.size() < 2) return;
+    for (size_t i = items.size() - 1; i > 0; --i) {
+        size_t j = (size_t)(rand() % (i + 1));
+        JellyfinItem tmp = items[i];
+        items[i] = items[j];
+        items[j] = tmp;
+    }
 }
 
 // ---- Config ----------------------------------------------------------------
@@ -271,6 +314,7 @@ int main() {
     mkdir("/3ds",       0777);
     mkdir("/3ds/3dsfin", 0777);
     loadConfig();
+    srand((unsigned)osGetTime());
 
     C3D_Init(C3D_DEFAULT_CMDBUF_SIZE);
     C2D_Init(C2D_DEFAULT_MAX_OBJECTS);
@@ -392,6 +436,21 @@ int main() {
                     break;
                 }
 
+                case LOAD_SHUFFLE:
+                    shuffleQueue = client.getChildren(shuffleParentId,
+                                                       ChildKind::PlayableRecursive,
+                                                       500);
+                    shuffleItems(shuffleQueue);
+                    shuffleIndex = 0;
+                    shuffleActive = !shuffleQueue.empty();
+                    if (shuffleActive)
+                        preparePlayback(shuffleQueue[0], STATE_ITEMS);
+                    else {
+                        errorMsg = "No playable movies, episodes, or songs found.";
+                        state = STATE_ERROR;
+                    }
+                    break;
+
                 default: break;
             }
             pending = LOAD_NONE;
@@ -443,21 +502,8 @@ int main() {
                     if (selResume >= resumeOffset + UI::RESUME_VISIBLE)
                         resumeOffset = selResume - UI::RESUME_VISIBLE + 1;
                     if (kDown & KEY_A && rn > 0) {
-                        playItem       = resumeItems[selResume];
-                        selectSettingsItem(playItem);
-                        playStartSec   = playItem.resumeTicks / 10000000.0;
-                        playAudioIndex = settingsAudioIndex;
-                        playSubtitleIndex = settingsSubtitleIndex;
-                        playSubtitleVtt = playSubtitleIndex >= 0
-                                        ? client.getSubtitleVtt(playItem.id,
-                                                                settingsSubtitleSourceId,
-                                                                playSubtitleIndex)
-                                        : std::string();
-                        playerUrl = client.getStreamUrl(playItem.id, playItem.resumeTicks,
-                                                        playAudioIndex,
-                                                        -1);
-                        playReturn     = STATE_LIBRARIES;
-                        state          = STATE_PLAYER;
+                        shuffleActive = false;
+                        preparePlayback(resumeItems[selResume], STATE_LIBRARIES);
                     }
                     if (kDown & KEY_Y && rn > 0) {
                         trackItem = resumeItems[selResume];
@@ -537,30 +583,33 @@ int main() {
                         loadMsg    = "Loading \"" + it.name + "\"...";
                         pending    = LOAD_DRILL;
                         state      = STATE_LOADING;
+                    } else if (isContainer(it)) {
+                        drillId    = it.id;
+                        drillTitle = lv.title + " - " + it.name;
+                        drillKind  = ChildKind::Direct;
+                        loadMsg    = "Loading \"" + it.name + "\"...";
+                        pending    = LOAD_DRILL;
+                        state      = STATE_LOADING;
                     } else {
-                        playItem       = it;
-                        selectSettingsItem(playItem);
-                        playStartSec   = it.resumeTicks / 10000000.0;
-                        playAudioIndex = settingsAudioIndex;
-                        playSubtitleIndex = settingsSubtitleIndex;
-                        playSubtitleVtt = playSubtitleIndex >= 0
-                                        ? client.getSubtitleVtt(playItem.id,
-                                                                settingsSubtitleSourceId,
-                                                                playSubtitleIndex)
-                                        : std::string();
-                        playerUrl = client.getStreamUrl(it.id, it.resumeTicks,
-                                                        playAudioIndex,
-                                                        -1);
-                        playReturn     = STATE_ITEMS;
-                        state          = STATE_PLAYER;
+                        shuffleActive = false;
+                        preparePlayback(it, STATE_ITEMS);
                     }
+                }
+
+                // X starts a shuffled queue containing every playable item under
+                // this album, artist, season, series, folder, or library level.
+                if (kDown & KEY_X) {
+                    shuffleParentId = lv.parentId;
+                    loadMsg = "Building shuffle queue...";
+                    pending = LOAD_SHUFFLE;
+                    state = STATE_LOADING;
                 }
 
                 // SELECT on a playable item opens the audio-track picker. Series
                 // and seasons have no streams of their own, so it does nothing there.
                 if (kDown & KEY_SELECT && n > 0) {
                     JellyfinItem& it = lv.items[lv.sel];
-                    if (it.type != "Series" && it.type != "Season") {
+                    if (!isContainer(it) && it.type != "Audio") {
                         trackItem = it;
                         selectSettingsItem(trackItem);
                         settingsReturn = STATE_ITEMS;
@@ -571,7 +620,7 @@ int main() {
                 }
                 if (kDown & KEY_Y && n > 0) {
                     JellyfinItem& it = lv.items[lv.sel];
-                    if (it.type != "Series" && it.type != "Season") {
+                    if (!isContainer(it) && it.type != "Audio") {
                         trackItem = it;
                         selectSettingsItem(trackItem);
                         settingsReturn = STATE_ITEMS;
@@ -631,26 +680,39 @@ int main() {
                 // Seeking restarts the transcode at the target time: playerPlay
                 // reports the target via seekTo and we call straight back in with
                 // a fresh stream URL (same mechanism as resume).
-                double seekTo;
+                bool playAnother;
                 do {
-                    seekTo = -1.0;
-                    playerPlay(playerUrl, playItem.runTimeTicks,
+                    playAnother = false;
+                    double seekTo;
+                    bool finished = false;
+                    do {
+                        seekTo = -1.0;
+                        playerPlay(playerUrl, playItem.runTimeTicks,
                                playItem.seriesName,
                                playItem.name,
                                playItem.productionYear,
-                               playStartSec, &seekTo, playSubtitleVtt);
-                    // Kill the finished/abandoned transcode job server-side; the
-                    // seek's new stream (fresh PlaySessionId) starts its own.
-                    client.stopTranscode();
-                    if (seekTo >= 0) {
-                        playStartSec = seekTo;
-                        // Carry the chosen audio track across the restart, or the
-                        // seek would silently drop back to the server's default.
-                        playerUrl    = client.getStreamUrl(
-                            playItem.id, (long long)(seekTo * 10000000.0),
-                            playAudioIndex, -1);
+                                   playStartSec, &seekTo, playSubtitleVtt,
+                                   &finished);
+                        client.stopTranscode();
+                        if (seekTo >= 0) {
+                            playStartSec = seekTo;
+                            long long ticks = (long long)(seekTo * 10000000.0);
+                            playerUrl = playItem.type == "Audio"
+                                      ? client.getAudioStreamUrl(playItem.id, ticks)
+                                      : client.getStreamUrl(playItem.id, ticks,
+                                                            playAudioIndex, -1);
+                        }
+                    } while (seekTo >= 0);
+
+                    if (finished && shuffleActive &&
+                        shuffleIndex + 1 < shuffleQueue.size()) {
+                        ++shuffleIndex;
+                        preparePlayback(shuffleQueue[shuffleIndex], playReturn);
+                        playAnother = true;
+                    } else {
+                        shuffleActive = false;
                     }
-                } while (seekTo >= 0);
+                } while (playAnother);
 
                 // playerPlay's consoleInit(GFX_BOTTOM) switched that screen to
                 // RGB565 + single-buffered and libctru never restores it, so

@@ -17,4 +17,5 @@ bool playerPlay(const std::string& url, long long runTimeTicks = 0,
                 int year = 0,
                 double startSec = 0.0,
                 double* seekOut = nullptr,
-                const std::string& subtitleVtt = "");
+                const std::string& subtitleVtt = "",
+                bool* finishedOut = nullptr);

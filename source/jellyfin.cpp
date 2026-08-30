@@ -209,6 +209,18 @@ std::vector<JellyfinItem> JellyfinClient::getChildren(const std::string& parentI
 
     char path[512];
     switch (kind) {
+    case ChildKind::PlayableRecursive:
+        snprintf(path, sizeof(path),
+                 "/Users/%s/Items"
+                 "?ParentId=%s"
+                 "&IncludeItemTypes=Movie,Episode,Audio"
+                 "&Recursive=true"
+                 "&Fields=RunTimeTicks,ProductionYear"
+                 "&SortBy=SortName&SortOrder=Ascending"
+                 "&Limit=%d",
+                 userId_.c_str(), parentId.c_str(), limit);
+        break;
+
     case ChildKind::Seasons:
         // A series' seasons, ordered by season number. No Recursive so episodes
         // stay one level down.
@@ -510,6 +522,34 @@ std::string JellyfinClient::getStreamUrl(const std::string& itemId,
     if (subtitleStreamIndex >= 0)
         out += "&SubtitleStreamIndex=" + std::to_string(subtitleStreamIndex);
     return out;
+}
+
+std::string JellyfinClient::getAudioStreamUrl(const std::string& itemId,
+                                               long long startTicks) {
+    static unsigned seq = 0;
+    char psid[64];
+    snprintf(psid, sizeof(psid), "3dsfin-music-%llu-%u",
+             (unsigned long long)time(nullptr), ++seq);
+    lastPlaySessionId_ = psid;
+
+    char url[1024];
+    snprintf(url, sizeof(url),
+             "%s/Audio/%s/main.m3u8"
+             "?SegmentContainer=ts"
+             "&SegmentLength=3"
+             "&MinSegments=1"
+             "&MediaSourceId=%s"
+             "&AudioCodec=aac"
+             "&AudioBitrate=128000"
+             "&MaxAudioChannels=2"
+             "&api_key=%s"
+             "&DeviceId=%s"
+             "&IsPlayback=true"
+             "&StartTimeTicks=%lld"
+             "&PlaySessionId=%s",
+             serverUrl_.c_str(), itemId.c_str(), itemId.c_str(), accessToken_.c_str(),
+             deviceId_.c_str(), startTicks, psid);
+    return std::string(url);
 }
 
 void JellyfinClient::stopTranscode() {
