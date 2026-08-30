@@ -574,15 +574,11 @@ static void drawPlaybackHud(double posSec, double durSec, bool paused) {
     GSPGPU_FlushDataCache(fb, 320 * 240 * 3);
 }
 
-static void presentPlaybackBottom(const std::vector<SubtitleCue>& cues,
-                                  const std::string& series,
-                                  const std::string& title, int year,
-                                  double posSec, double durSec, bool paused) {
-    consoleClear();
-    drawSubtitle(cues, posSec);
-    drawMeta(series, title, year);
-    drawControls();
-    drawSeekBar(posSec, durSec);
+static void presentPlaybackBottom(double posSec, double durSec, bool paused) {
+    u8* fb = gfxGetFramebuffer(GFX_BOTTOM, GFX_LEFT, nullptr, nullptr);
+    // Clear and redraw the entire back buffer ourselves. PrintConsole caches a
+    // framebuffer pointer and was clearing the just-presented HUD after swaps.
+    hudRect(fb, 0, 0, 320, 240, 6, 12, 20);
     drawPlaybackHud(posSec, durSec, paused);
     flushBottomConsole();
     gfxScreenSwapBuffers(GFX_BOTTOM, false);
@@ -1022,6 +1018,7 @@ bool playerPlay(const std::string& url, long long runTimeTicks,
 
     // The HUD is fully redrawn into both alternating buffers below. Explicit
     // double buffering matches what Azahar presents after each VBlank.
+    gfxSetScreenFormat(GFX_BOTTOM, GSP_BGR8_OES);
     gfxSetDoubleBuffering(GFX_BOTTOM, true);
     consoleInit(GFX_BOTTOM, NULL);
     consoleClear();
@@ -1030,8 +1027,11 @@ bool playerPlay(const std::string& url, long long runTimeTicks,
 
     FILE* dbg = fopen("/3ds/3dsfin/player_debug.txt", "w");
     if (dbg) {
-        fprintf(dbg, "BUILD=emulator-bottom-subs-autologin-1 vttBytes=%lu\n",
-                (unsigned long)subtitleVtt.size());
+        u16 bottomW = 0, bottomH = 0;
+        gfxGetFramebuffer(GFX_BOTTOM, GFX_LEFT, &bottomW, &bottomH);
+        fprintf(dbg, "BUILD=shared-raw-hud-1 vttBytes=%lu bottomFormat=%d dims=%ux%u\n",
+                (unsigned long)subtitleVtt.size(),
+                (int)gfxGetScreenFormat(GFX_BOTTOM), bottomW, bottomH);
         size_t query = url.find('?');
         fprintf(dbg, "URL: %.*s%s\n\n",
                 (int)(query == std::string::npos ? url.size() : query),
@@ -1156,8 +1156,7 @@ bool playerPlay(const std::string& url, long long runTimeTicks,
         // Prime both buffers so the first presentation cannot alternate to a
         // blank one before the regular HUD refresh begins.
         for (int pass = 0; pass < 2; pass++) {
-            presentPlaybackBottom(subtitleCues, series, title, year,
-                                  startSec, durSec, false);
+            presentPlaybackBottom(startSec, durSec, false);
             gspWaitForVBlank();
         }
     }
@@ -1263,8 +1262,7 @@ bool playerPlay(const std::string& url, long long runTimeTicks,
         if (paused) {
             s64 pausedNow = (s64)osGetTime();
             if (!g_dbg && pausedNow - lastBottomRender >= 66) {
-                presentPlaybackBottom(subtitleCues, series, title, year,
-                                      posSec, durSec, true);
+                presentPlaybackBottom(posSec, durSec, true);
                 lastBottomRender = pausedNow;
             }
             svcSleepThread(30000000LL);
@@ -1414,8 +1412,7 @@ bool playerPlay(const std::string& url, long long runTimeTicks,
         // untouched alternate buffer, making the HUD flash and vanish.
         s64 renderNow = (s64)osGetTime();
         if (!g_dbg && renderNow - lastBottomRender >= 66) {
-            presentPlaybackBottom(subtitleCues, series, title, year,
-                                  posSec, durSec, paused);
+            presentPlaybackBottom(posSec, durSec, paused);
             lastBottomRender = renderNow;
         }
 
