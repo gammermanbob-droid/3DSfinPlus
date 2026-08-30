@@ -574,6 +574,20 @@ static void drawPlaybackHud(double posSec, double durSec, bool paused) {
     GSPGPU_FlushDataCache(fb, 320 * 240 * 3);
 }
 
+static void presentPlaybackBottom(const std::vector<SubtitleCue>& cues,
+                                  const std::string& series,
+                                  const std::string& title, int year,
+                                  double posSec, double durSec, bool paused) {
+    consoleClear();
+    drawSubtitle(cues, posSec);
+    drawMeta(series, title, year);
+    drawControls();
+    drawSeekBar(posSec, durSec);
+    drawPlaybackHud(posSec, durSec, paused);
+    flushBottomConsole();
+    gfxScreenSwapBuffers(GFX_BOTTOM, false);
+}
+
 static int hlsSegmentNumber(const std::string& uri) {
     size_t end = uri.find(".ts");
     if (end == std::string::npos) return -1;
@@ -1006,10 +1020,9 @@ bool playerPlay(const std::string& url, long long runTimeTicks,
         }
     }
 
-    // Keep the bottom player on one stable framebuffer. Swapping buffers after
-    // consoleInit left the console drawing into the hidden buffer on Azahar,
-    // which made working controls and progress text completely invisible.
-    gfxSetDoubleBuffering(GFX_BOTTOM, false);
+    // The HUD is fully redrawn into both alternating buffers below. Explicit
+    // double buffering matches what Azahar presents after each VBlank.
+    gfxSetDoubleBuffering(GFX_BOTTOM, true);
     consoleInit(GFX_BOTTOM, NULL);
     consoleClear();
     if (audioOnly) blitArtwork(artworkData);
@@ -1135,17 +1148,18 @@ bool playerPlay(const std::string& url, long long runTimeTicks,
         fprintf(dbg, "subtitle cues=%lu\n", (unsigned long)subtitleCues.size());
         fflush(dbg);
     }
-    int       lastSubtitleTick = -1;
     long long firstPts    = -1;          // PTS of the first frame (position origin)
     long long curPesPts   = -1;          // PTS of the access unit now being accumulated
-    int       lastShownSec = -1;         // throttle: redraw bar only when seconds change
+    s64       lastBottomRender = -1000;
 
-    if (!g_dbg) {                                // static text around the seek bar
-        drawMeta(series, title, year);
-        drawControls();
-        drawSeekBar(startSec, durSec);
-        drawPlaybackHud(startSec, durSec, false);
-        flushBottomConsole();
+    if (!g_dbg) {
+        // Prime both buffers so the first presentation cannot alternate to a
+        // blank one before the regular HUD refresh begins.
+        for (int pass = 0; pass < 2; pass++) {
+            presentPlaybackBottom(subtitleCues, series, title, year,
+                                  startSec, durSec, false);
+            gspWaitForVBlank();
+        }
     }
 
     // Start the background download thread filling the ring. Same priority as the
@@ -1193,7 +1207,7 @@ bool playerPlay(const std::string& url, long long runTimeTicks,
                 consoleClear();
                 drawMeta(series, title, year);
                 drawControls();
-                lastShownSec = -1;                     // force seek-bar redraw
+                lastBottomRender = -1000;              // force a full HUD redraw
             }
         }
         dbgComboPrev = dbgCombo;
@@ -1246,7 +1260,16 @@ bool playerPlay(const std::string& url, long long runTimeTicks,
         }
         pausePrevA = aHeld;
 
-        if (paused) { svcSleepThread(30000000LL); continue; }   // input scans at loop top
+        if (paused) {
+            s64 pausedNow = (s64)osGetTime();
+            if (!g_dbg && pausedNow - lastBottomRender >= 66) {
+                presentPlaybackBottom(subtitleCues, series, title, year,
+                                      posSec, durSec, true);
+                lastBottomRender = pausedNow;
+            }
+            svcSleepThread(30000000LL);
+            continue;
+        }
 
         // Drain whole TS packets out of the ring. Decoding a frame paces+blits
         // inside processH264 (it may sleep); meanwhile dlThread keeps refilling the
@@ -1386,20 +1409,15 @@ bool playerPlay(const std::string& url, long long runTimeTicks,
             if (clock >= 0) posSec = startSec + clock - firstPts / 90000.0;
         }
 
-        // Refresh the seek bar once per second of playback (skip while the debug
-        // console is showing, so the two don't fight over the bottom screen).
-        if (!g_dbg && (int)posSec != lastShownSec) {
-            drawSeekBar(posSec, durSec);
-            lastShownSec = (int)posSec;
+        // Fully redraw and present the active bottom buffer at 15 Hz. Partial
+        // console updates were correct but Azahar periodically presented the
+        // untouched alternate buffer, making the HUD flash and vanish.
+        s64 renderNow = (s64)osGetTime();
+        if (!g_dbg && renderNow - lastBottomRender >= 66) {
+            presentPlaybackBottom(subtitleCues, series, title, year,
+                                  posSec, durSec, paused);
+            lastBottomRender = renderNow;
         }
-        // Four updates per second keeps short cues responsive without repeatedly
-        // repainting the console on every demux pass.
-        if (!g_dbg && (int)(posSec * 4.0) != lastSubtitleTick) {
-            drawSubtitle(subtitleCues, posSec);
-            lastSubtitleTick = (int)(posSec * 4.0);
-        }
-        if (!g_dbg) drawPlaybackHud(posSec, durSec, paused);
-        if (!g_dbg) flushBottomConsole();
 
         // Stream finished and fully drained → done.
         if (g_ring.producerDone && ringUsed() < TS_SZ) break;
