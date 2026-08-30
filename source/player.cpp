@@ -4,6 +4,7 @@
 #include "http.h"
 #include "aacdec.h"
 #include <3ds.h>
+#include <citro2d.h>
 #include <cstring>
 #include <cstdio>
 #include <cstdlib>
@@ -25,6 +26,7 @@ static u32 g_decW = VID_W, g_decH = VID_H;
 // default; toggled during playback by holding X + D-Pad Up. File logging to
 // player_debug.txt is independent of this flag. DBG() prints only when enabled.
 static bool g_dbg = false;
+static C3D_RenderTarget* g_playbackHudTarget = nullptr;
 #define DBG(...) do { if (g_dbg) printf(__VA_ARGS__); } while (0)
 
 // ─── Buffer sizes ─────────────────────────────────────────────────────────────
@@ -575,6 +577,32 @@ static void drawPlaybackHud(u8* fb, double posSec, double durSec, bool paused) {
 }
 
 static void presentPlaybackBottom(double posSec, double durSec, bool paused) {
+    if (g_playbackHudTarget) {
+        double frac = durSec > 0 ? posSec / durSec : 0;
+        if (frac < 0) frac = 0;
+        if (frac > 1) frac = 1;
+        C3D_FrameBegin(C3D_FRAME_SYNCDRAW);
+        C2D_TargetClear(g_playbackHudTarget, C2D_Color32(6, 12, 20, 255));
+        C2D_SceneBegin(g_playbackHudTarget);
+        C2D_DrawRectSolid(0, 118, 0, 320, 122, C2D_Color32(18, 42, 68, 255));
+        C2D_DrawRectSolid(12, 130, 0, 296, 14, C2D_Color32(225, 232, 238, 255));
+        C2D_DrawRectSolid(12, 130, 0, 296 * frac, 14, C2D_Color32(0, 235, 205, 255));
+        // Large, unambiguous previous / next and play-pause controls.
+        C2D_DrawRectSolid(34, 164, 0, 56, 56, C2D_Color32(240, 245, 250, 255));
+        C2D_DrawRectSolid(126, 154, 0, 68, 68, C2D_Color32(0, 190, 175, 255));
+        C2D_DrawRectSolid(230, 164, 0, 56, 56, C2D_Color32(240, 245, 250, 255));
+        if (paused) {
+            C2D_DrawTriangle(146, 170, C2D_Color32(255,255,255,255),
+                             146, 206, C2D_Color32(255,255,255,255),
+                             178, 188, C2D_Color32(255,255,255,255), 0);
+        } else {
+            C2D_DrawRectSolid(145, 171, 0, 10, 34, C2D_Color32(255,255,255,255));
+            C2D_DrawRectSolid(165, 171, 0, 10, 34, C2D_Color32(255,255,255,255));
+        }
+        C2D_DrawRectSolid(290, 198, 0, 26, 34, C2D_Color32(210, 35, 55, 255));
+        C3D_FrameEnd(0);
+        return;
+    }
     u8* fb = gfxGetFramebuffer(GFX_BOTTOM, GFX_LEFT, nullptr, nullptr);
     // Clear and redraw the entire back buffer ourselves. PrintConsole caches a
     // framebuffer pointer and was clearing the just-presented HUD after swaps.
@@ -1023,6 +1051,10 @@ bool playerPlay(const std::string& url, long long runTimeTicks,
     gfxSetScreenFormat(GFX_BOTTOM, GSP_BGR8_OES);
     gfxSetDoubleBuffering(GFX_BOTTOM, true);
     // Do not call consoleInit here: the HUD owns and redraws both bottom buffers.
+    C3D_Init(C3D_DEFAULT_CMDBUF_SIZE);
+    C2D_Init(C2D_DEFAULT_MAX_OBJECTS);
+    C2D_Prepare();
+    g_playbackHudTarget = C2D_CreateScreenTarget(GFX_BOTTOM, GFX_LEFT);
     if (audioOnly) blitArtwork(artworkData);
     DBG("playerPlay\n");
 
@@ -1030,7 +1062,7 @@ bool playerPlay(const std::string& url, long long runTimeTicks,
     if (dbg) {
         u16 bottomW = 0, bottomH = 0;
         gfxGetFramebuffer(GFX_BOTTOM, GFX_LEFT, &bottomW, &bottomH);
-        fprintf(dbg, "BUILD=music-restored-bgr-hud-7 vttBytes=%lu bottomFormat=%d dims=%ux%u\n",
+        fprintf(dbg, "BUILD=citro2d-hud-8 vttBytes=%lu bottomFormat=%d dims=%ux%u\n",
                 (unsigned long)subtitleVtt.size(),
                 (int)gfxGetScreenFormat(GFX_BOTTOM), bottomW, bottomH);
         size_t query = url.find('?');
@@ -1061,6 +1093,7 @@ bool playerPlay(const std::string& url, long long runTimeTicks,
         linearFree(g_ring.data); linearFree(pesBuf);
         linearFree(nalBuf); linearFree(audBuf);
         freeFifoSlots();
+        C2D_Fini(); C3D_Fini(); g_playbackHudTarget = nullptr;
         svcSleepThread(3000000000LL);
         return false;
     }
@@ -1087,6 +1120,7 @@ bool playerPlay(const std::string& url, long long runTimeTicks,
         linearFree(g_ring.data); linearFree(pesBuf);
         linearFree(nalBuf); linearFree(audBuf);
         freeFifoSlots();
+        C2D_Fini(); C3D_Fini(); g_playbackHudTarget = nullptr;
         svcSleepThread(3000000000LL);
         return false;
     }
@@ -1461,5 +1495,8 @@ bool playerPlay(const std::string& url, long long runTimeTicks,
     linearFree(nalBuf); linearFree(audBuf);
     freeFifoSlots();
     if (seekOut) *seekOut = seekReq;
+    C2D_Fini();
+    C3D_Fini();
+    g_playbackHudTarget = nullptr;
     return true;
 }
