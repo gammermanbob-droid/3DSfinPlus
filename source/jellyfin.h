@@ -98,6 +98,11 @@ public:
     std::string getAudioStreamUrl(const std::string& itemId,
                                   long long startTicks = 0);
 
+    // Fetch Jellyfin's synced/unsynced lyrics and convert them to WebVTT so the
+    // bottom-screen subtitle renderer can display them during music playback.
+    std::string getLyricsVtt(const std::string& itemId,
+                             long long runTimeTicks = 0);
+
     // Tells the server to kill the transcode job of the last getStreamUrl()
     // stream. Call between seeks (and after playback) so orphaned ffmpeg jobs
     // don't pile up server-side. Safe to call when nothing is active.

@@ -556,6 +556,87 @@ std::string JellyfinClient::getAudioStreamUrl(const std::string& itemId,
     return std::string(url);
 }
 
+static std::string vttTime(long long ticks) {
+    if (ticks < 0) ticks = 0;
+    long long ms = ticks / 10000;
+    int milli = (int)(ms % 1000);
+    long long sec = ms / 1000;
+    int s = (int)(sec % 60);
+    int m = (int)((sec / 60) % 60);
+    int h = (int)(sec / 3600);
+    char out[32];
+    snprintf(out, sizeof(out), "%02d:%02d:%02d.%03d", h, m, s, milli);
+    return std::string(out);
+}
+
+std::string JellyfinClient::getLyricsVtt(const std::string& itemId,
+                                          long long runTimeTicks) {
+    char path[256];
+    snprintf(path, sizeof(path), "/Audio/%s/Lyrics", itemId.c_str());
+    auto resp = http_.get(path);
+    if (!resp.ok()) {
+        long long end = runTimeTicks > 0 ? runTimeTicks : 24LL * 60 * 60 * 10000000;
+        return "WEBVTT\n\n00:00:00.000 --> " + vttTime(end) +
+               "\nNo lyrics available\n\n";
+    }
+
+    struct Line { long long start; std::string text; bool timed; };
+    std::vector<Line> lines;
+    std::string arr = jArr(resp.body, "Lyrics");
+    jForEach(arr, [&](const std::string& obj) {
+        std::string text = jStr(obj, "Text");
+        if (text.empty()) return;
+        std::string raw = jStr(obj, "Start");
+        bool timed = !raw.empty() && raw != "null";
+        long long start = 0;
+        if (timed) {
+            for (char c : raw)
+                if (c < '0' || c > '9') { timed = false; break; }
+            if (timed) start = std::stoll(raw);
+        }
+        lines.push_back({start, text, timed});
+    });
+
+    if (lines.empty()) {
+        long long end = runTimeTicks > 0 ? runTimeTicks : 24LL * 60 * 60 * 10000000;
+        return "WEBVTT\n\n00:00:00.000 --> " + vttTime(end) +
+               "\nNo lyrics available\n\n";
+    }
+
+    bool synced = false;
+    for (const auto& line : lines) if (line.timed) { synced = true; break; }
+    std::string out = "WEBVTT\n\n";
+    if (synced) {
+        for (size_t i = 0; i < lines.size(); i++) {
+            if (!lines[i].timed) continue;
+            long long end = runTimeTicks > lines[i].start
+                          ? runTimeTicks : lines[i].start + 100000000;
+            for (size_t j = i + 1; j < lines.size(); j++) {
+                if (lines[j].timed && lines[j].start > lines[i].start) {
+                    end = lines[j].start;
+                    break;
+                }
+            }
+            out += vttTime(lines[i].start) + " --> " + vttTime(end) + "\n";
+            out += lines[i].text + "\n\n";
+        }
+    } else {
+        // Unsynced lyrics are paged three lines at a time. Twelve seconds per
+        // page keeps them readable while still fitting the compact 3DS screen.
+        const long long pageTicks = 12LL * 10000000;
+        for (size_t i = 0, page = 0; i < lines.size(); i += 3, page++) {
+            long long start = (long long)page * pageTicks;
+            long long end = start + pageTicks;
+            if (runTimeTicks > 0 && end > runTimeTicks) end = runTimeTicks;
+            out += vttTime(start) + " --> " + vttTime(end) + "\n";
+            for (size_t j = i; j < lines.size() && j < i + 3; j++)
+                out += lines[j].text + "\n";
+            out += "\n";
+        }
+    }
+    return out;
+}
+
 void JellyfinClient::stopTranscode() {
     if (lastPlaySessionId_.empty()) return;
     char path[256];

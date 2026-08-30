@@ -231,11 +231,13 @@ static void preparePlayback(const JellyfinItem& item, AppState returnState) {
     playStartSec = item.resumeTicks / 10000000.0;
     playAudioIndex = settingsAudioIndex;
     playSubtitleIndex = item.type == "Audio" ? -1 : settingsSubtitleIndex;
-    playSubtitleVtt = playSubtitleIndex >= 0
-                    ? client.getSubtitleVtt(playItem.id,
-                                            settingsSubtitleSourceId,
-                                            playSubtitleIndex)
-                    : std::string();
+    playSubtitleVtt = item.type == "Audio"
+                    ? client.getLyricsVtt(item.id, item.runTimeTicks)
+                    : playSubtitleIndex >= 0
+                        ? client.getSubtitleVtt(playItem.id,
+                                                settingsSubtitleSourceId,
+                                                playSubtitleIndex)
+                        : std::string();
     playArtworkData = item.type == "Audio"
                     ? client.getPrimaryImage(item.id, 400)
                     : std::string();
