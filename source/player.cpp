@@ -3,6 +3,10 @@
 #include "stb_image.h"
 #include "http.h"
 #include "aacdec.h"
+#include "image.h"
+#include "hud_dpad_left.h"
+#include "hud_dpad_right.h"
+#include "hud_button_b.h"
 #include <3ds.h>
 #include <citro2d.h>
 #include <cstring>
@@ -29,7 +33,20 @@ static bool g_dbg = false;
 static C3D_RenderTarget* g_playbackHudTarget = nullptr;
 static bool g_hudC3dOk = false, g_hudC2dOk = false;
 static bool g_hudFrameAttempted = false, g_hudFrameAccepted = false;
+static C2D_Image g_hudLeft{}, g_hudRight{}, g_hudB{};
+static C2D_Font g_hudFont = nullptr;
+static C2D_TextBuf g_hudTextBuf = nullptr;
 #define DBG(...) do { if (g_dbg) printf(__VA_ARGS__); } while (0)
+
+static void releaseHudAssets() {
+    Image_free(&g_hudLeft);
+    Image_free(&g_hudRight);
+    Image_free(&g_hudB);
+    if (g_hudTextBuf) C2D_TextBufDelete(g_hudTextBuf);
+    if (g_hudFont) C2D_FontFree(g_hudFont);
+    g_hudTextBuf = nullptr;
+    g_hudFont = nullptr;
+}
 
 // ─── Buffer sizes ─────────────────────────────────────────────────────────────
 static constexpr u32 TS_SZ  = 188;
@@ -586,24 +603,43 @@ static void presentPlaybackBottom(double posSec, double durSec, bool paused) {
         g_hudFrameAttempted = true;
         if (!C3D_FrameBegin(C3D_FRAME_SYNCDRAW)) return;
         g_hudFrameAccepted = true;
+        if (g_hudTextBuf) C2D_TextBufClear(g_hudTextBuf);
         C2D_TargetClear(g_playbackHudTarget, C2D_Color32(6, 12, 20, 255));
         C2D_SceneBegin(g_playbackHudTarget);
-        C2D_DrawRectSolid(0, 118, 0, 320, 122, C2D_Color32(18, 42, 68, 255));
-        C2D_DrawRectSolid(12, 130, 0, 296, 14, C2D_Color32(225, 232, 238, 255));
-        C2D_DrawRectSolid(12, 130, 0, 296 * frac, 14, C2D_Color32(0, 235, 205, 255));
-        // Large, unambiguous previous / next and play-pause controls.
-        C2D_DrawRectSolid(34, 164, 0, 56, 56, C2D_Color32(240, 245, 250, 255));
-        C2D_DrawRectSolid(126, 154, 0, 68, 68, C2D_Color32(0, 190, 175, 255));
-        C2D_DrawRectSolid(230, 164, 0, 56, 56, C2D_Color32(240, 245, 250, 255));
+        C2D_DrawRectSolid(0, 0, 0, 320, 34, C2D_Color32(15, 60, 120, 255));
+        C2D_DrawRectSolid(12, 62, 0, 296, 10, C2D_Color32(65, 78, 96, 255));
+        C2D_DrawRectSolid(12, 62, 0, 296 * frac, 10, C2D_Color32(0, 235, 205, 255));
+
+        auto text = [](const char* s, float x, float y, float scale, u32 color) {
+            if (!g_hudFont || !g_hudTextBuf) return;
+            C2D_Text t;
+            C2D_TextFontParse(&t, g_hudFont, g_hudTextBuf, s);
+            C2D_TextOptimize(&t);
+            C2D_DrawText(&t, C2D_WithColor, x, y, 0.5f, scale, scale, color);
+        };
+        text("NOW PLAYING", 10, 8, 0.52f, C2D_Color32(255,255,255,255));
+        if (g_hudLeft.tex)
+            C2D_DrawImageAt(g_hudLeft, 18, 92, 0.2f, nullptr, 0.94f, 0.94f);
+        if (g_hudRight.tex)
+            C2D_DrawImageAt(g_hudRight, 238, 92, 0.2f, nullptr, 0.94f, 0.94f);
+
+        C2D_DrawCircleSolid(160, 122, 0.1f, 36, C2D_Color32(0, 190, 175, 255));
         if (paused) {
-            C2D_DrawTriangle(146, 170, C2D_Color32(255,255,255,255),
-                             146, 206, C2D_Color32(255,255,255,255),
-                             178, 188, C2D_Color32(255,255,255,255), 0);
+            C2D_DrawTriangle(150, 105, C2D_Color32(255,255,255,255),
+                             150, 139, C2D_Color32(255,255,255,255),
+                             178, 122, C2D_Color32(255,255,255,255), 0.2f);
         } else {
-            C2D_DrawRectSolid(145, 171, 0, 10, 34, C2D_Color32(255,255,255,255));
-            C2D_DrawRectSolid(165, 171, 0, 10, 34, C2D_Color32(255,255,255,255));
+            C2D_DrawRectSolid(149, 105, 0.2f, 9, 34, C2D_Color32(255,255,255,255));
+            C2D_DrawRectSolid(166, 105, 0.2f, 9, 34, C2D_Color32(255,255,255,255));
         }
-        C2D_DrawRectSolid(290, 198, 0, 26, 34, C2D_Color32(210, 35, 55, 255));
+        text("A", 154, 145, 0.48f, C2D_Color32(255,255,255,255));
+        text(paused ? "PLAY" : "PAUSE", paused ? 140 : 135, 169, 0.42f,
+             C2D_Color32(210,225,235,255));
+        text("-10 SEC", 22, 164, 0.38f, C2D_Color32(210,225,235,255));
+        text("+30 SEC", 242, 164, 0.38f, C2D_Color32(210,225,235,255));
+        if (g_hudB.tex)
+            C2D_DrawImageAt(g_hudB, 255, 187, 0.2f, nullptr, 0.92f, 0.92f);
+        text("BACK", 284, 203, 0.38f, C2D_Color32(255,255,255,255));
         C3D_FrameEnd(0);
         return;
     }
@@ -1068,6 +1104,11 @@ bool playerPlay(const std::string& url, long long runTimeTicks,
                                       GX_TRANSFER_IN_FORMAT(GX_TRANSFER_FMT_RGBA8) |
                                       GX_TRANSFER_OUT_FORMAT(GX_TRANSFER_FMT_RGB8) |
                                       GX_TRANSFER_SCALING(GX_TRANSFER_SCALE_NO));
+        Image_loadFromMemory(dpad_left_png, dpad_left_png_len, &g_hudLeft);
+        Image_loadFromMemory(dpad_right_png, dpad_right_png_len, &g_hudRight);
+        Image_loadFromMemory(button_b_png, button_b_png_len, &g_hudB);
+        g_hudFont = C2D_FontLoadSystem(CFG_REGION_USA);
+        g_hudTextBuf = C2D_TextBufNew(512);
     }
     g_hudFrameAttempted = false;
     g_hudFrameAccepted = false;
@@ -1081,7 +1122,7 @@ bool playerPlay(const std::string& url, long long runTimeTicks,
     if (dbg) {
         u16 bottomW = 0, bottomH = 0;
         gfxGetFramebuffer(GFX_BOTTOM, GFX_LEFT, &bottomW, &bottomH);
-        fprintf(dbg, "BUILD=early-citro2d-hud-12 vttBytes=%lu bottomFormat=%d dims=%ux%u c3d=%d c2d=%d target=%p frameTry=%d frameOk=%d\n",
+        fprintf(dbg, "BUILD=polished-assets-hud-13 vttBytes=%lu bottomFormat=%d dims=%ux%u c3d=%d c2d=%d target=%p frameTry=%d frameOk=%d\n",
                 (unsigned long)subtitleVtt.size(),
                 (int)gfxGetScreenFormat(GFX_BOTTOM), bottomW, bottomH,
                 (int)g_hudC3dOk, (int)g_hudC2dOk, (void*)g_playbackHudTarget,
@@ -1115,6 +1156,7 @@ bool playerPlay(const std::string& url, long long runTimeTicks,
         linearFree(nalBuf); linearFree(audBuf);
         freeFifoSlots();
         if (g_playbackHudTarget) C3D_RenderTargetDetachOutput(g_playbackHudTarget);
+        releaseHudAssets();
         C2D_Fini(); C3D_Fini(); g_playbackHudTarget = nullptr;
         svcSleepThread(3000000000LL);
         return false;
@@ -1148,6 +1190,7 @@ bool playerPlay(const std::string& url, long long runTimeTicks,
         linearFree(nalBuf); linearFree(audBuf);
         freeFifoSlots();
         if (g_playbackHudTarget) C3D_RenderTargetDetachOutput(g_playbackHudTarget);
+        releaseHudAssets();
         C2D_Fini(); C3D_Fini(); g_playbackHudTarget = nullptr;
         svcSleepThread(3000000000LL);
         return false;
@@ -1530,6 +1573,7 @@ bool playerPlay(const std::string& url, long long runTimeTicks,
     freeFifoSlots();
     if (seekOut) *seekOut = seekReq;
     if (g_playbackHudTarget) C3D_RenderTargetDetachOutput(g_playbackHudTarget);
+    releaseHudAssets();
     C2D_Fini();
     C3D_Fini();
     g_playbackHudTarget = nullptr;
