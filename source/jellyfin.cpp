@@ -23,8 +23,50 @@ static std::string jStr(const std::string& json, const std::string& key) {
         pos++;
         std::string out;
         while (pos < json.size() && json[pos] != '"') {
-            if (json[pos] == '\\') { pos++; }
-            if (pos < json.size()) out += json[pos++];
+            if (json[pos] != '\\') {
+                out += json[pos++];
+                continue;
+            }
+            pos++; // JSON escape introducer
+            if (pos >= json.size()) break;
+            char esc = json[pos++];
+            if (esc == 'u' && pos + 4 <= json.size()) {
+                unsigned code = 0;
+                bool valid = true;
+                for (int n = 0; n < 4; n++) {
+                    char c = json[pos + n];
+                    unsigned v;
+                    if      (c >= '0' && c <= '9') v = c - '0';
+                    else if (c >= 'a' && c <= 'f') v = c - 'a' + 10;
+                    else if (c >= 'A' && c <= 'F') v = c - 'A' + 10;
+                    else { valid = false; break; }
+                    code = (code << 4) | v;
+                }
+                if (valid) {
+                    pos += 4;
+                    if (code <= 0x7F) out += static_cast<char>(code);
+                    else if (code <= 0x7FF) {
+                        out += static_cast<char>(0xC0 | (code >> 6));
+                        out += static_cast<char>(0x80 | (code & 0x3F));
+                    } else {
+                        out += static_cast<char>(0xE0 | (code >> 12));
+                        out += static_cast<char>(0x80 | ((code >> 6) & 0x3F));
+                        out += static_cast<char>(0x80 | (code & 0x3F));
+                    }
+                    continue;
+                }
+                // Preserve a malformed escape rather than silently dropping it.
+                out += 'u';
+                continue;
+            }
+            switch (esc) {
+                case 'n': out += '\n'; break;
+                case 'r': out += '\r'; break;
+                case 't': out += '\t'; break;
+                case 'b': out += '\b'; break;
+                case 'f': out += '\f'; break;
+                default:  out += esc;  break; // quote, slash, backslash
+            }
         }
         return out;
     }
@@ -124,7 +166,7 @@ void JellyfinClient::applyAuthHeader() {
     char buf[512];
     snprintf(buf, sizeof(buf),
              "MediaBrowser Client=\"3DSFin\", Device=\"Nintendo 3DS\","
-             " DeviceId=\"%s\", Version=\"0.2.0\", Token=\"%s\"",
+             " DeviceId=\"%s\", Version=\"0.5.0\", Token=\"%s\"",
              deviceId_.c_str(), accessToken_.c_str());
     http_.setHeader("X-Emby-Authorization", buf);
 }
@@ -147,7 +189,7 @@ bool JellyfinClient::authenticate(const std::string& username,
     char authHdr[256];
     snprintf(authHdr, sizeof(authHdr),
              "MediaBrowser Client=\"3DSFin\", Device=\"Nintendo 3DS\","
-             " DeviceId=\"%s\", Version=\"0.2.0\"",
+             " DeviceId=\"%s\", Version=\"0.5.0\"",
              deviceId_.c_str());
     http_.setHeader("X-Emby-Authorization", authHdr);
 
@@ -209,6 +251,17 @@ std::vector<JellyfinItem> JellyfinClient::getChildren(const std::string& parentI
 
     char path[512];
     switch (kind) {
+    case ChildKind::LiveTvChannels:
+        snprintf(path, sizeof(path),
+                 "/LiveTv/Channels"
+                 "?UserId=%s"
+                 "&Fields=PrimaryImageAspectRatio"
+                 "&EnableImages=true"
+                 "&SortBy=SortName&SortOrder=Ascending"
+                 "&Limit=%d",
+                 userId_.c_str(), limit);
+        break;
+
     case ChildKind::PlayableRecursive:
         snprintf(path, sizeof(path),
                  "/Users/%s/Items"
@@ -305,6 +358,10 @@ std::vector<JellyfinItem> JellyfinClient::getChildren(const std::string& parentI
         if (!item.id.empty()) result.push_back(item);
     });
     return result;
+}
+
+std::vector<JellyfinItem> JellyfinClient::getLiveTvChannels(int limit) {
+    return getChildren(std::string(), ChildKind::LiveTvChannels, limit);
 }
 
 std::vector<JellyfinItem> JellyfinClient::getResumeItems(int limit) {
@@ -525,6 +582,69 @@ std::string JellyfinClient::getStreamUrl(const std::string& itemId,
         out += "&AudioStreamIndex=" + std::to_string(audioStreamIndex);
     if (subtitleStreamIndex >= 0)
         out += "&SubtitleStreamIndex=" + std::to_string(subtitleStreamIndex);
+    return out;
+}
+
+std::string JellyfinClient::getLiveTvStreamUrl(const std::string& channelId) {
+    char path[512];
+    snprintf(path, sizeof(path), "/Items/%s/PlaybackInfo", channelId.c_str());
+
+    // Deliberately offer only HLS H.264/AAC transcoding. This makes Jellyfin
+    // return a live master playlist instead of the provider's raw 720p stream.
+    std::string body =
+        "{\"UserId\":\"" + userId_ +
+        "\",\"StartTimeTicks\":0,\"IsPlayback\":true"
+        ",\"AutoOpenLiveStream\":true"
+        ",\"EnableDirectPlay\":false,\"EnableDirectStream\":false"
+        ",\"EnableTranscoding\":true,\"AllowVideoStreamCopy\":false"
+        ",\"AllowAudioStreamCopy\":false,\"MaxStreamingBitrate\":600000"
+        ",\"MaxAudioChannels\":2,\"DeviceProfile\":{"
+          "\"MaxStreamingBitrate\":600000,\"MaxStaticBitrate\":600000"
+          ",\"DirectPlayProfiles\":[],\"TranscodingProfiles\":[{"
+            "\"Container\":\"ts\",\"Type\":\"Video\""
+            ",\"VideoCodec\":\"h264\",\"AudioCodec\":\"aac\""
+            ",\"Protocol\":\"hls\",\"Context\":\"Streaming\""
+            ",\"EstimateContentLength\":false"
+            ",\"EnableMpegtsM2TsMode\":false"
+            ",\"TranscodeSeekInfo\":\"Auto\",\"CopyTimestamps\":true"
+            ",\"EnableSubtitlesInManifest\":false,\"MaxAudioChannels\":\"2\""
+            ",\"MinSegments\":1,\"SegmentLength\":3"
+            ",\"BreakOnNonKeyFrames\":false,\"Conditions\":[]}]"
+          ",\"ContainerProfiles\":[],\"CodecProfiles\":[]"
+          ",\"SubtitleProfiles\":[]}}";
+
+    auto resp = http_.post(path, body);
+    lastStatus_ = resp.status;
+
+    std::string transcodeUrl;
+    std::string mediaSources = jArr(resp.body, "MediaSources");
+    jForEach(mediaSources, [&](const std::string& source) {
+        if (transcodeUrl.empty()) transcodeUrl = jStr(source, "TranscodingUrl");
+    });
+    std::string session = jStr(resp.body, "PlaySessionId");
+    if (!session.empty()) lastPlaySessionId_ = session;
+
+    FILE* dbg = fopen("/3ds/3dsfin/live_tv_debug.txt", "w");
+    if (dbg) {
+        fprintf(dbg, "status=%d result=%08lX stage=%s sources=%lu url=%s\n",
+                resp.status, (unsigned long)resp.result,
+                httpFailureStageName(resp.failureStage),
+                (unsigned long)mediaSources.size(),
+                transcodeUrl.empty() ? "(missing)" : transcodeUrl.c_str());
+        fclose(dbg);
+    }
+    if (!resp.ok() || transcodeUrl.empty()) return std::string();
+
+    std::string out = transcodeUrl.compare(0, 7, "http://") == 0 ||
+                      transcodeUrl.compare(0, 8, "https://") == 0
+                    ? transcodeUrl : serverUrl_ + transcodeUrl;
+    out += (out.find('?') == std::string::npos ? "?" : "&");
+    out += "api_key=" + accessToken_;
+    // Reinforce the small-screen limits in case a server version omits profile
+    // conditions while constructing its TranscodingUrl.
+    out += "&MaxWidth=400&MaxHeight=240&MaxFramerate=24"
+           "&VideoBitrate=400000&AudioBitrate=96000&MaxAudioChannels=2"
+           "&Profile=baseline&SegmentContainer=ts&MinSegments=1";
     return out;
 }
 

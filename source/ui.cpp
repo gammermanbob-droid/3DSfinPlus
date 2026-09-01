@@ -434,7 +434,11 @@ void UI::drawItemGrid(const std::vector<JellyfinItem>& items,
                       items[selected].type == "BoxSet");
     bool music = !items.empty() && selected < (int)items.size()
               && items[selected].type == "Audio";
+    bool live = !items.empty() && selected < (int)items.size()
+             && (items[selected].type == "TvChannel" ||
+                 items[selected].type == "LiveTvChannel");
     drawBottomHints(drillable ? "A: Open   X: Shuffle   B: Back"
+                    : live ? "A: Watch Live   B: Back"
                     : music ? "A: Play   X: Shuffle   B: Back"
                             : "A: Play  X: Shuffle  SELECT/Y: Tracks");
 }

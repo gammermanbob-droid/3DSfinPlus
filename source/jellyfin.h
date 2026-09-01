@@ -41,6 +41,7 @@ struct JellyfinSubtitleTrack {
 // Which children to enumerate beneath a parent when browsing.
 enum class ChildKind {
     Direct,             // a library's direct children: Movies or Series, by name
+    LiveTvChannels,     // enabled Live TV channels (no programme guide)
     Seasons,            // a series' seasons, ordered by season number
     Episodes,           // a season's episodes, ordered by episode number
     EpisodesRecursive,  // every episode beneath a series, flattened (seasonless fallback)
@@ -70,6 +71,10 @@ public:
     // Each item's resumeTicks holds the saved playback position.
     std::vector<JellyfinItem> getResumeItems(int limit = 12);
 
+    // Lists channels from Jellyfin Live TV. Guide/programme data is deliberately
+    // not requested; the client only needs a name, image, and playable channel id.
+    std::vector<JellyfinItem> getLiveTvChannels(int limit = 500);
+
     // The item's audio tracks, in stream order. Empty if the item has no audio or
     // the lookup failed. Used to offer a track picker before starting the stream.
     std::vector<JellyfinAudioTrack> getAudioTracks(const std::string& itemId);
@@ -92,6 +97,10 @@ public:
                              long long startTicks = 0,
                              int       audioStreamIndex = -1,
                              int       subtitleStreamIndex = -1);
+
+    // Live channels must be opened through PlaybackInfo before requesting HLS;
+    // unlike files, they have no finite runtime from which main.m3u8 can be made.
+    std::string getLiveTvStreamUrl(const std::string& channelId);
 
     // Audio-only HLS/AAC stream for Jellyfin music items. It uses the same TS
     // demux and Helix AAC decoder as video playback, without requiring H.264.

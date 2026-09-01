@@ -5,6 +5,16 @@ Video playback of your entire jellyfin catalog, on your New 3ds!
 plays server-transcoded AAC audio, and supports shuffled continuous playback.
 Music playback uses a bottom-screen HUD with play/pause, seeking, progress, and
 album artwork on the top screen.
+### Live TV (experimental)
+
+Live TV channels configured on the Jellyfin server appear in a dedicated
+**Live TV** library tile and can be watched directly. Programme-guide browsing
+is intentionally not included. Live TV compatibility is experimental and is
+not guaranteed: results can vary with the provider, tuner, proxy, codec, and
+Jellyfin transcoding configuration.
+For faster startup and navigation, browsing uses a metadata-only layout without
+library, movie, episode, or channel images. Music album art is still loaded when
+a song enters the player.
 3DSfin is a *work in progress* jellyfin client for New Nintendo 3DS.
 
 [![GitHub Release](https://img.shields.io/github/v/release/arechawla/3dsfin)](https://github.com/arechawla/3DSfin/releases) ![Downloads](https://img.shields.io/github/downloads/arechawla/3dsfin/total)

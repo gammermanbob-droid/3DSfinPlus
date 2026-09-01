@@ -13,9 +13,9 @@ SOURCES     := source source/aac
 DATA        := data
 INCLUDES    := source source/aac
 
-APP_TITLE       := 3DSFin Bottom Subs
-APP_DESCRIPTION := Bottom-screen subtitle test
-APP_AUTHOR      := 3DSFin
+APP_TITLE       := 3DSfinPlus
+APP_DESCRIPTION := Jellyfin video, music and Live TV
+APP_AUTHOR      := 3DSfinPlus
 
 ARCH    := -march=armv6k -mtune=mpcore -mfloat-abi=hard -mtp=soft
 

@@ -706,11 +706,18 @@ static int hlsSegmentNumber(const std::string& uri) {
     size_t end = uri.find(".ts");
     if (end == std::string::npos) return -1;
     size_t slash = uri.rfind('/', end);
-    size_t begin = slash == std::string::npos ? 0 : slash + 1;
-    if (begin >= end) return -1;
+    size_t fileBegin = slash == std::string::npos ? 0 : slash + 1;
+    if (fileBegin >= end) return -1;
+
+    // Jellyfin file VOD commonly uses 0.ts, 1.ts, ... while live HLS prefixes
+    // the transcode hash (for example 7247ac...0.ts). Read the final run of
+    // digits rather than requiring the complete basename to be numeric.
+    size_t begin = end;
+    while (begin > fileBegin && uri[begin - 1] >= '0' && uri[begin - 1] <= '9')
+        begin--;
+    if (begin == end) return -1;
     int value = 0;
     for (size_t i = begin; i < end; i++) {
-        if (uri[i] < '0' || uri[i] > '9') return -1;
         value = value * 10 + (uri[i] - '0');
     }
     return value;
@@ -1176,7 +1183,7 @@ bool playerPlay(const std::string& url, long long runTimeTicks,
     if (dbg) {
         u16 bottomW = 0, bottomH = 0;
         gfxGetFramebuffer(GFX_BOTTOM, GFX_LEFT, &bottomW, &bottomH);
-        fprintf(dbg, "BUILD=lyrics-safe-hud-16 vttBytes=%lu bottomFormat=%d dims=%ux%u c3d=%d c2d=%d target=%p frameTry=%d frameOk=%d\n",
+        fprintf(dbg, "BUILD=3dsfinplus-0.5.0 vttBytes=%lu bottomFormat=%d dims=%ux%u c3d=%d c2d=%d target=%p frameTry=%d frameOk=%d\n",
                 (unsigned long)subtitleVtt.size(),
                 (int)gfxGetScreenFormat(GFX_BOTTOM), bottomW, bottomH,
                 (int)g_hudC3dOk, (int)g_hudC2dOk, (void*)g_playbackHudTarget,
@@ -1383,7 +1390,9 @@ bool playerPlay(const std::string& url, long long runTimeTicks,
         // a fresh stream there (same path as resume).
         bool skL = (hidKeysHeld() & KEY_DLEFT)  != 0;
         bool skR = (hidKeysHeld() & KEY_DRIGHT) != 0;
-        if ((skL && !seekPrevL) || (skR && !seekPrevR)) {
+        // A zero duration denotes a live channel. It has no stable timeline, so
+        // never restart it with a bogus StartTimeTicks seek.
+        if (durSec > 0 && ((skL && !seekPrevL) || (skR && !seekPrevR))) {
             double t = posSec + ((skR && !seekPrevR) ? 30.0 : -10.0);
             if (durSec > 0 && t > durSec - 10.0) t = durSec - 10.0;
             if (t < 0) t = 0;

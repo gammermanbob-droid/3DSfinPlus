@@ -91,11 +91,10 @@ static void buildCoverTextures() {
                 libCoverData[i].size(), &libCovers[i]);
 }
 
-// Fetch each library's cover art over the network into the cache, then build textures.
+// Fast/no-art mode: browsing is metadata-only. Album artwork is still fetched
+// on demand by preparePlayback() for Audio items.
 static void fetchLibCovers() {
     libCoverData.assign(libraries.size(), std::string());
-    for (size_t i = 0; i < libraries.size(); i++)
-        libCoverData[i] = client.getPrimaryImage(libraries[i].id, 256);
     buildCoverTextures();
 }
 
@@ -110,15 +109,14 @@ static void buildResumeTextures() {
                 resumeCoverData[i].size(), &resumeCovers[i]);
 }
 
-// Fetch the "Continue Watching" list and its poster art, then build textures.
+// Fetch only Continue Watching metadata; poster requests made startup scale with
+// the number of rows and are omitted in fast/no-art mode.
 static void fetchResume() {
     resumeItems  = client.getResumeItems();
     selResume    = 0;
     resumeOffset = 0;
     resumeFocus  = false;
     resumeCoverData.assign(resumeItems.size(), std::string());
-    for (size_t i = 0; i < resumeItems.size(); i++)
-        resumeCoverData[i] = client.getPrimaryImage(resumeItems[i].id, 200);
     buildResumeTextures();
 }
 
@@ -140,7 +138,8 @@ static void buildLevelCovers(BrowseLevel& lv) {
                 lv.coverData[i].size(), &lv.covers[i]);
 }
 
-// Network: list the parent's children, cache each cover's JPEG, build textures.
+// Network: list only the parent's children. Covers remain empty by design so a
+// large season/channel list appears after one request rather than N+1 requests.
 static void pushLevel(const std::string& parentId, const std::string& title,
                       ChildKind kind) {
     if (!browseStack.empty()) freeLevelCovers(browseStack.back());
@@ -149,7 +148,9 @@ static void pushLevel(const std::string& parentId, const std::string& title,
     lv.parentId    = parentId;
     lv.title       = title;
     lv.kind        = kind;
-    lv.items       = client.getChildren(parentId, kind);
+    lv.items       = kind == ChildKind::LiveTvChannels
+                   ? client.getLiveTvChannels()
+                   : client.getChildren(parentId, kind);
     // A series with no season grouping: fall back to a flat episode list so the
     // user lands on episodes instead of an empty season grid.
     if (kind == ChildKind::Seasons && lv.items.empty()) {
@@ -157,8 +158,6 @@ static void pushLevel(const std::string& parentId, const std::string& title,
         lv.items = client.getChildren(parentId, ChildKind::EpisodesRecursive);
     }
     lv.coverData.assign(lv.items.size(), std::string());
-    for (size_t i = 0; i < lv.items.size(); i++)
-        lv.coverData[i] = client.getPrimaryImage(lv.items[i].id, 200);
     browseStack.push_back(std::move(lv));
     buildLevelCovers(browseStack.back());
 }
@@ -225,6 +224,12 @@ static bool isContainer(const JellyfinItem& item) {
            item.type == "BoxSet";
 }
 
+static bool isLiveChannel(const JellyfinItem& item) {
+    // Jellyfin's public DTO normally says TvChannel; accept the internal model
+    // name too for compatibility with other server versions.
+    return item.type == "TvChannel" || item.type == "LiveTvChannel";
+}
+
 static void preparePlayback(const JellyfinItem& item, AppState returnState) {
     playItem = item;
     selectSettingsItem(playItem);
@@ -243,8 +248,10 @@ static void preparePlayback(const JellyfinItem& item, AppState returnState) {
                     : std::string();
     playerUrl = item.type == "Audio"
               ? client.getAudioStreamUrl(item.id, item.resumeTicks)
-              : client.getStreamUrl(item.id, item.resumeTicks,
-                                    playAudioIndex, -1);
+              : isLiveChannel(item)
+                  ? client.getLiveTvStreamUrl(item.id)
+                  : client.getStreamUrl(item.id, item.resumeTicks,
+                                        playAudioIndex, -1);
     playReturn = returnState;
     state = STATE_PLAYER;
 }
@@ -396,6 +403,9 @@ int main() {
 
                 case LOAD_LIBRARIES:
                     libraries  = client.getLibraries();
+                    // Live TV lives outside /Users/{id}/Views, so expose it as a
+                    // synthetic library tile and load its channel list on demand.
+                    libraries.push_back({"__livetv__", "Live TV", "livetv"});
                     selLib     = 0;
                     libOffset  = 0;
                     fetchLibCovers();   // network: cache JPEGs + build textures
@@ -406,7 +416,9 @@ int main() {
                 case LOAD_ITEMS:
                     clearBrowse();
                     pushLevel(libraries[selLib].id, libraries[selLib].name,
-                              ChildKind::Direct);
+                              libraries[selLib].collectionType == "livetv"
+                                  ? ChildKind::LiveTvChannels
+                                  : ChildKind::Direct);
                     state = STATE_ITEMS;
                     break;
 
@@ -604,7 +616,7 @@ int main() {
 
                 // X starts a shuffled queue containing every playable item under
                 // this album, artist, season, series, folder, or library level.
-                if (kDown & KEY_X) {
+                if (kDown & KEY_X && n > 0 && !isLiveChannel(lv.items[lv.sel])) {
                     shuffleParentId = lv.parentId;
                     loadMsg = "Building shuffle queue...";
                     pending = LOAD_SHUFFLE;
