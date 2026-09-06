@@ -151,6 +151,37 @@ void UI::drawLoadingScreen(const std::string& msg) {
     C2D_SceneBegin(bot_);
 }
 
+void UI::drawServerRefreshScreen(const std::vector<JellyfinScanProgress>& scans, bool complete) {
+    C2D_SceneBegin(top_);
+    drawTopBar("Library and guide scans");
+    drawRect(0, 26, TOP_W, TOP_H - 26, COL_BG);
+    const char* names[] = {"Libraries", "Guide"};
+    for (size_t i = 0; i < scans.size() && i < 2; ++i) {
+        const auto& scan = scans[i];
+        float y = 38 + i * 78;
+        std::string label = names[i];
+        if (scan.percent >= 0) {
+            char value[24];
+            snprintf(value, sizeof(value), "  %.0f%%", scan.percent);
+            label += value;
+        }
+        drawText(label, 12, y, 0.52f, COL_WHITE);
+        drawRect(12, y + 24, TOP_W - 24, 10, COL_ROW_ALT);
+        if (scan.percent >= 0)
+            drawRect(12, y + 24, (TOP_W - 24) * scan.percent / 100.f, 10,
+                     scan.completed ? COL_GREEN : COL_SEL);
+        drawText(scan.message, 12, y + 39, 0.45f, COL_GREY);
+    }
+    bool active = false;
+    for (const auto& scan : scans) active = active || scan.active;
+    drawText(complete ? "Scans complete - ready to reload!" :
+             active ? "Scan status updates automatically." : "Scan ended - check results above.",
+             12, 207, 0.48f, complete ? COL_GREEN : COL_GREY);
+    C2D_SceneBegin(bot_);
+    drawText("You can go back while scans run.", 8, 60, 0.46f, COL_GREY);
+    drawBottomHints("A: Reload libraries   B: Back");
+}
+
 void UI::drawErrorScreen(const std::string& msg) {
     C2D_SceneBegin(top_);
     drawTopBar("Error");
@@ -338,6 +369,8 @@ void UI::drawLibraryGrid(const std::vector<JellyfinLibrary>& libs,
     C2D_SceneBegin(bot_);
     drawRect(0, 0, BOT_W, BOT_H, COL_BG_BOT);
     drawResumeStrip(resume, resumeCovers, resumeSel, resumeOffset, resumeFocus);
+
+    drawText("X: Scan libraries + guide", 6, BOT_H - 38, 0.42f, COL_GREY);
 
     if (resumeFocus)
         drawBottomHints("A: Play  SELECT: Audio  Y: Subtitles");

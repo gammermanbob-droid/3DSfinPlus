@@ -4,6 +4,8 @@
 #include <cstdlib>
 #include <ctime>
 #include <functional>
+#include <algorithm>
+#include <cmath>
 
 // ---------------------------------------------------------------------------
 // Minimal JSON helpers — handles the specific shapes Jellyfin returns.
@@ -221,6 +223,115 @@ bool JellyfinClient::authenticate(const std::string& username,
     return true;
 }
 
+std::string JellyfinClient::refreshLibrariesAndGuide() {
+    auto failure = [](int status) {
+        if (status == 401) return std::string("Sign in again.");
+        if (status == 403) return std::string("Admin permission required.");
+        if (status == 0) return std::string("Server unreachable; check connection.");
+        return std::string("Request failed (HTTP ") + std::to_string(status) + ").";
+    };
+    scans_.assign(2, JellyfinScanProgress{});
+    auto response = http_.get("/ScheduledTasks");
+    lastStatus_ = response.status;
+    if (!response.ok()) {
+        for (auto& scan : scans_) scan.message = failure(response.status);
+        return "Scans not started.\n" + failure(response.status);
+    }
+
+    std::string report;
+    const char* keys[] = {"RefreshLibrary", "RefreshGuide"};
+    const char* names[] = {"Libraries", "Guide"};
+    for (int i = 0; i < 2; ++i) {
+        auto& scan = scans_[i];
+        std::string id, state;
+        jForEach(response.body, [&](const std::string& task) {
+            if (jStr(task, "Key") == keys[i]) {
+                id = jStr(task, "Id");
+                state = jStr(task, "State");
+                scan.previousEnd = jStr(jObj(task, "LastExecutionResult"), "EndTimeUtc");
+            }
+        });
+        scan.id = id;
+        report += std::string(names[i]) + ": ";
+        if (id.empty()) {
+            scan.message = "Task not found";
+            report += "task not found.\n";
+        } else if (state == "Running" || state == "Cancelling") {
+            scan.active = true;
+            scan.message = state == "Running" ? "Running" : "Stopping";
+            report += state == "Running" ? "already running.\n" : "stopping; try again later.\n";
+        } else {
+            // SweepDSEmu defers bodyless POSTs, then waits on an uninitialized
+            // request future. Jellyfin accepts an empty JSON object here.
+            auto started = http_.post("/ScheduledTasks/Running/" + id, "{}");
+            lastStatus_ = started.status;
+            scan.active = started.ok();
+            scan.message = started.ok() ? "Starting..." : failure(started.status);
+            report += started.ok() ? "started.\n" : "\n" + failure(started.status) + "\n";
+        }
+    }
+    return report + "\nAccepted scans run on the server.\nReload libraries when they finish.";
+}
+
+bool JellyfinClient::scansActive() const {
+    for (const auto& scan : scans_) if (scan.active) return true;
+    return false;
+}
+
+bool JellyfinClient::scansCompleted() const {
+    if (scans_.empty()) return false;
+    for (const auto& scan : scans_) if (!scan.completed) return false;
+    return true;
+}
+
+void JellyfinClient::pollScanProgress() {
+    if (!scansActive()) return;
+    auto response = http_.get("/ScheduledTasks");
+    for (auto& scan : scans_) {
+        if (!scan.active) continue;
+        if (!response.ok()) {
+            scan.message = "Connection lost; retrying...";
+            scan.percent = -1;
+            if (response.status == 401 || response.status == 403) {
+                scan.message = "Permission denied; sign in again";
+                scan.active = false;
+            }
+            continue;
+        }
+        bool found = false;
+        jForEach(response.body, [&](const std::string& task) {
+            if (jStr(task, "Id") != scan.id) return;
+            found = true;
+            const auto state = jStr(task, "State");
+            const auto result = jObj(task, "LastExecutionResult");
+            const auto end = jStr(result, "EndTimeUtc");
+            if (state == "Running" || state == "Cancelling") {
+                scan.message = state == "Running" ? "Running" : "Stopping";
+                const auto value = jStr(task, "CurrentProgressPercentage");
+                char* tail = nullptr;
+                float progress = strtof(value.c_str(), &tail);
+                scan.percent = tail != value.c_str() && *tail == '\0' && std::isfinite(progress)
+                    ? std::max(0.f, std::min(100.f, progress)) : -1.f;
+            } else if (state == "Idle" && !end.empty() && end != scan.previousEnd) {
+                scan.active = false;
+                const auto status = jStr(result, "Status");
+                scan.completed = status == "Completed";
+                scan.percent = scan.completed ? 100.f : -1.f;
+                scan.message = scan.completed ? "Done" : status == "Cancelled" ? "Cancelled" : "Scan failed";
+            } else {
+                // An idle task can still show the previous run just after POST.
+                scan.message = "Waiting for scan result...";
+                scan.percent = -1;
+            }
+        });
+        if (!found) {
+            scan.active = false;
+            scan.percent = -1;
+            scan.message = "Task no longer available";
+        }
+    }
+}
+
 std::vector<JellyfinLibrary> JellyfinClient::getLibraries() {
     std::vector<JellyfinLibrary> result;
 
@@ -251,6 +362,18 @@ std::vector<JellyfinItem> JellyfinClient::getChildren(const std::string& parentI
 
     char path[512];
     switch (kind) {
+    case ChildKind::Favorites:
+        snprintf(path, sizeof(path),
+                 "/Users/%s/Items"
+                 "?Filters=IsFavorite"
+                 "&Recursive=true"
+                 "&IncludeItemTypes=Movie,Series,Episode,Audio,MusicAlbum,MusicArtist,Playlist,BoxSet"
+                 "&Fields=RunTimeTicks,ProductionYear"
+                 "&SortBy=SortName&SortOrder=Ascending"
+                 "&Limit=%d",
+                 userId_.c_str(), limit);
+        break;
+
     case ChildKind::LiveTvChannels:
         snprintf(path, sizeof(path),
                  "/LiveTv/Channels"

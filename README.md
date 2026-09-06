@@ -5,6 +5,15 @@ Video playback of your entire jellyfin catalog, on your New 3ds!
 plays server-transcoded AAC audio, and supports shuffled continuous playback.
 Music playback uses a bottom-screen HUD with play/pause, seeking, progress, and
 album artwork on the top screen.
+### Scan libraries and guide data
+
+On the library home screen, press **X** to start Jellyfin's library scan and
+Live TV guide refresh. The signed-in Jellyfin account needs administrator
+permission. The result screen reports each task as started, already running,
+or failed; accepted scans continue on the server in the background.
+The scan menu displays separate library and guide progress bars, updating every three seconds while open. A green completion message appears only after both scans succeed. Press A to reload libraries, or B to leave scans running; X returns to their progress while they are active. Missing percentages, connection loss, failures, and cancellations are shown without claiming completion.
+This refreshes server guide data; it does not add programme-guide browsing.
+
 ### Live TV (experimental)
 
 Live TV channels configured on the Jellyfin server appear in a dedicated

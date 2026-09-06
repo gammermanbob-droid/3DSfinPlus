@@ -16,6 +16,7 @@ enum AppState {
     STATE_LOGIN,
     STATE_LOADING,
     STATE_LIBRARIES,
+    STATE_SERVER_REFRESH,
     STATE_ITEMS,
     STATE_TRACKS,   // audio-track picker for the item SELECT was pressed on
     STATE_SUBTITLES,
@@ -27,6 +28,7 @@ enum PendingLoad {
     LOAD_NONE,
     LOAD_CONNECT_AND_AUTH,
     LOAD_LIBRARIES,
+    LOAD_SERVER_REFRESH,
     LOAD_ITEMS,   // open a library: list its movies/series
     LOAD_DRILL,   // open a series/season: list its seasons/episodes (see drillKind)
     LOAD_TRACKS,  // fetch an item's audio tracks for the picker
@@ -37,6 +39,7 @@ enum PendingLoad {
 // ---- Globals ---------------------------------------------------------------
 
 static JellyfinClient client;
+static u64 nextScanPoll = 0;
 static AppState  state       = STATE_SERVER_SETUP;
 static PendingLoad pending   = LOAD_NONE;
 static std::string loadMsg;
@@ -401,8 +404,17 @@ int main() {
                     }
                     break;
 
+                case LOAD_SERVER_REFRESH:
+                    client.refreshLibrariesAndGuide();
+                    nextScanPoll = osGetTime() + 2000;
+                    state = STATE_SERVER_REFRESH;
+                    break;
+
                 case LOAD_LIBRARIES:
                     libraries  = client.getLibraries();
+                    // Favorites is a cross-library Jellyfin user filter, exposed
+                    // as a synthetic tile just like Live TV.
+                    libraries.push_back({"__favorites__", "Favorites", "favorites"});
                     // Live TV lives outside /Users/{id}/Views, so expose it as a
                     // synthetic library tile and load its channel list on demand.
                     libraries.push_back({"__livetv__", "Live TV", "livetv"});
@@ -415,10 +427,15 @@ int main() {
 
                 case LOAD_ITEMS:
                     clearBrowse();
+                    {
+                    ChildKind rootKind = ChildKind::Direct;
+                    if (libraries[selLib].collectionType == "livetv")
+                        rootKind = ChildKind::LiveTvChannels;
+                    else if (libraries[selLib].collectionType == "favorites")
+                        rootKind = ChildKind::Favorites;
                     pushLevel(libraries[selLib].id, libraries[selLib].name,
-                              libraries[selLib].collectionType == "livetv"
-                                  ? ChildKind::LiveTvChannels
-                                  : ChildKind::Direct);
+                              rootKind);
+                    }
                     state = STATE_ITEMS;
                     break;
 
@@ -505,7 +522,31 @@ int main() {
                 }
                 break;
 
+            case STATE_SERVER_REFRESH:
+                if (client.scansActive() && osGetTime() >= nextScanPoll) {
+                    client.pollScanProgress();
+                    nextScanPoll = osGetTime() + 3000;
+                }
+                if (kDown & KEY_B) state = STATE_LIBRARIES;
+                else if (kDown & KEY_A) {
+                    loadMsg = "Reloading libraries...";
+                    pending = LOAD_LIBRARIES;
+                    state = STATE_LOADING;
+                }
+                break;
+
             case STATE_LIBRARIES: {
+                if (kDown & KEY_X) {
+                    if (client.scansActive()) {
+                        state = STATE_SERVER_REFRESH;
+                        nextScanPoll = 0;
+                        break;
+                    }
+                    loadMsg = "Starting library and guide scans...";
+                    pending = LOAD_SERVER_REFRESH;
+                    state = STATE_LOADING;
+                    break;
+                }
                 int n    = (int)libraries.size();
                 int cols = UI::GRID_COLS;
 
@@ -786,6 +827,9 @@ int main() {
                 break;
             case STATE_LOADING:
                 ui.drawLoadingScreen(loadMsg);
+                break;
+            case STATE_SERVER_REFRESH:
+                ui.drawServerRefreshScreen(client.scanProgress(), client.scansCompleted());
                 break;
             case STATE_LIBRARIES:
                 ui.drawLibraryGrid(libraries, libCovers, selLib, libOffset,

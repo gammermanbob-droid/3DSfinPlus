@@ -34,6 +34,7 @@ public:
     void drawLoginScreen(const std::string& serverUrl, const std::string& username);
     void drawLoadingScreen(const std::string& msg);
     void drawErrorScreen(const std::string& msg);
+    void drawServerRefreshScreen(const std::vector<JellyfinScanProgress>& scans, bool complete);
 
     // Grid of library cover-art cards. covers is parallel to libs; a card whose
     // covers[i].tex is null falls back to a colored placeholder. The bottom screen

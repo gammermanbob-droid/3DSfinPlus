@@ -3,6 +3,12 @@
 #include <string>
 #include <vector>
 
+struct JellyfinScanProgress {
+    std::string id, previousEnd, message;
+    float percent = -1;
+    bool active = false, completed = false;
+};
+
 struct JellyfinLibrary {
     std::string id;
     std::string name;
@@ -41,6 +47,7 @@ struct JellyfinSubtitleTrack {
 // Which children to enumerate beneath a parent when browsing.
 enum class ChildKind {
     Direct,             // a library's direct children: Movies or Series, by name
+    Favorites,          // signed-in user's favorited media across all libraries
     LiveTvChannels,     // enabled Live TV channels (no programme guide)
     Seasons,            // a series' seasons, ordered by season number
     Episodes,           // a season's episodes, ordered by episode number
@@ -59,6 +66,14 @@ public:
     bool authenticate(const std::string& username, const std::string& password);
 
     std::vector<JellyfinLibrary> getLibraries();
+
+    // Start both server tasks with the signed-in user's permissions.
+    // Reports accepted/running tasks separately from errors, not completion.
+    std::string refreshLibrariesAndGuide();
+    void pollScanProgress();
+    const std::vector<JellyfinScanProgress>& scanProgress() const { return scans_; }
+    bool scansActive() const;
+    bool scansCompleted() const;
 
     // Lists a parent's children according to kind: a library's movies/series,
     // a series' seasons, a season's episodes, or (fallback) every episode beneath
@@ -126,6 +141,7 @@ public:
     int         lastStatus()      const { return lastStatus_; }
 
 private:
+    std::vector<JellyfinScanProgress> scans_;
     int         lastStatus_ = 0;
     std::string serverUrl_;
     std::string userId_;
