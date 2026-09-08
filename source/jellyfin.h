@@ -23,6 +23,7 @@ struct JellyfinItem {
     long long   runTimeTicks;   // 10,000,000 ticks per second
     int         productionYear;
     long long   resumeTicks;    // saved playback position (0 = start), from UserData
+    std::string currentProgram; // Live TV only: CurrentProgram.Name, empty otherwise
 };
 
 // One selectable audio track of an item (anime typically ships jpn + eng).
@@ -86,9 +87,15 @@ public:
     // Each item's resumeTicks holds the saved playback position.
     std::vector<JellyfinItem> getResumeItems(int limit = 12);
 
-    // Lists channels from Jellyfin Live TV. Guide/programme data is deliberately
-    // not requested; the client only needs a name, image, and playable channel id.
+    // Lists channels from Jellyfin Live TV, including each channel's currently
+    // airing programme name (item.currentProgram) for the Live TV guide menu.
+    // No look-ahead: only the program airing right now is requested.
     std::vector<JellyfinItem> getLiveTvChannels(int limit = 500);
+
+    // Series matching a free-text search term (title contains/fuzzy match, same
+    // as Jellyfin's own search). Used by the home menu's series search bar.
+    // Movies, episodes, and other item types are deliberately excluded.
+    std::vector<JellyfinItem> searchSeries(const std::string& query, int limit = 50);
 
     // The item's audio tracks, in stream order. Empty if the item has no audio or
     // the lookup failed. Used to offer a track picker before starting the stream.

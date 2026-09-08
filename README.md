@@ -14,16 +14,31 @@ or failed; accepted scans continue on the server in the background.
 The scan menu displays separate library and guide progress bars, updating every three seconds while open. A green completion message appears only after both scans succeed. Press A to reload libraries, or B to leave scans running; X returns to their progress while they are active. Missing percentages, connection loss, failures, and cancellations are shown without claiming completion.
 This refreshes server guide data; it does not add programme-guide browsing.
 
-### Live TV (experimental)
+### Home menus: Library, Continue Watching, Live TV Guide
 
-Live TV channels configured on the Jellyfin server appear in a dedicated
-**Live TV** library tile and can be watched directly. Programme-guide browsing
-is intentionally not included. Live TV compatibility is experimental and is
-not guaranteed: results can vary with the provider, tuner, proxy, codec, and
+The home screen is three menus, switched with the **L**/**R** shoulder
+buttons: **Library** (your Jellyfin libraries, plus a Favorites tile),
+**Continue Watching** (a full touchable poster grid, promoted out of the old
+bottom-screen strip), and **Live TV Guide**. Circle Pad and the touch screen
+both move the selection the same way D-Pad presses do; **A** opens, plays, or
+watches whatever is highlighted. On the Library menu, press **Y** or tap
+**Search** (bottom-right) to search series by title.
+
+### Live TV guide
+
+Live TV channels appear in their own **Live TV Guide** menu (Menu 3, via
+L/R) rather than as a library tile: the bottom screen lists every channel
+with its icon and the programme airing *right now*; the top screen shows the
+highlighted channel larger. There is intentionally no schedule look-ahead —
+only what's currently on. Live TV compatibility is experimental and is not
+guaranteed: results can vary with the provider, tuner, proxy, codec, and
 Jellyfin transcoding configuration.
-For faster startup and navigation, browsing uses a metadata-only layout without
-library, movie, episode, or channel images. Music album art is still loaded when
-a song enters the player.
+
+For faster startup, browsing a library's movies/series/episodes stays a
+metadata-only layout without cover art (music album art still loads when a
+song enters the player). Continue Watching posters and Live TV channel icons
+are the exception: both lists are small and bounded, so their artwork loads
+up front.
 3DSfin is a *work in progress* jellyfin client for New Nintendo 3DS.
 
 [![GitHub Release](https://img.shields.io/github/v/release/arechawla/3dsfin)](https://github.com/arechawla/3DSfin/releases) ![Downloads](https://img.shields.io/github/downloads/arechawla/3dsfin/total)
@@ -79,6 +94,11 @@ Playback:
 Press **X** in any item grid to shuffle all playable movies, episodes, or songs
 under the current library, series, season, artist, album, or folder. Songs advance
 automatically until the shuffled queue ends; press **B** to stop and return.
+
+During playback the bottom-screen HUD is touchable: tap the seek bar to jump
+to that point, or tap the play/pause, rewind (-10s), fast-forward (+30s), or
+back icons — the same layout the on-screen labels already describe, just also
+reachable by touch.
 
 ### Lyrics (WIP)
 

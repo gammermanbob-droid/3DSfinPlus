@@ -34,7 +34,14 @@ enum PendingLoad {
     LOAD_TRACKS,  // fetch an item's audio tracks for the picker
     LOAD_SUBTITLES,
     LOAD_SHUFFLE, // recursively collect playable items beneath the current level
+    LOAD_LIVETV,  // fetch Live TV channels + current program + icons for Menu 3
+    LOAD_SEARCH,  // series search (Menu 1's search bar)
 };
+
+// The three home-level menus, cycled with L/R. Replaces the old resumeFocus
+// toggle: Continue Watching is now a full menu instead of a strip you drop
+// into from the library grid.
+enum HomeMenu { HOME_LIBRARIES, HOME_CONTINUE, HOME_LIVETV };
 
 // ---- Globals ---------------------------------------------------------------
 
@@ -64,13 +71,31 @@ struct BrowseLevel {
 };
 static std::vector<BrowseLevel> browseStack;
 
-// "Continue Watching" strip (bottom screen of the grid view). resumeFocus flips
-// the d-pad between the top-screen grid and this strip.
+// Continue Watching (Menu 2). A full menu now rather than a strip you drop
+// into from the library grid; the visible page is derived from selResume.
 static std::vector<JellyfinItem> resumeItems;
 static std::vector<C2D_Image>    resumeCovers;
 static std::vector<std::string>  resumeCoverData;
-static int  selResume = 0, resumeOffset = 0;
-static bool resumeFocus = false;
+static int  selResume = 0;
+
+// Home-level state: which of the three menus is showing, and shared
+// edge-detect state for touch taps on the library/continue-watching/live-tv
+// menus (only one of those cases runs per frame, so one flag suffices).
+static HomeMenu homeMenu = HOME_LIBRARIES;
+static bool     homeTouchWasHeld = false;
+static bool     itemsTouchWasHeld = false;
+
+// Live TV guide (Menu 3). Fetched once per session (or whenever the guide is
+// rescanned) rather than every time the user switches into the menu.
+static std::vector<JellyfinItem> liveChannels;
+static std::vector<C2D_Image>    liveChannelIcons;
+static std::vector<std::string>  liveChannelIconData;
+static int  selLive = 0;
+static bool liveLoaded = false;
+
+// Series search (Menu 1's search bar). Results are pushed onto the normal
+// browse stack so drilling into a result works exactly like any other series.
+static std::string searchQuery;
 
 static void freeLibCovers() {
     for (auto& im : libCovers) Image_free(&im);
@@ -112,14 +137,41 @@ static void buildResumeTextures() {
                 resumeCoverData[i].size(), &resumeCovers[i]);
 }
 
-// Fetch only Continue Watching metadata; poster requests made startup scale with
-// the number of rows and are omitted in fast/no-art mode.
+static void freeLiveIcons() {
+    for (auto& im : liveChannelIcons) Image_free(&im);
+    liveChannelIcons.clear();
+}
+
+// (Re)build Live TV channel icon textures from cached JPEG bytes — no network.
+static void buildLiveIconTextures() {
+    freeLiveIcons();
+    liveChannelIcons.assign(liveChannelIconData.size(), C2D_Image{});
+    for (size_t i = 0; i < liveChannelIconData.size(); i++)
+        if (!liveChannelIconData[i].empty())
+            Image_loadFromMemory(
+                reinterpret_cast<const unsigned char*>(liveChannelIconData[i].data()),
+                liveChannelIconData[i].size(), &liveChannelIcons[i]);
+}
+
+// Live TV channel list is small and bounded (unlike a whole library), so
+// unlike fast/no-art browsing it's worth fetching every channel's icon.
+static void fetchLiveIcons() {
+    liveChannelIconData.assign(liveChannels.size(), std::string());
+    for (size_t i = 0; i < liveChannels.size(); i++)
+        liveChannelIconData[i] = client.getPrimaryImage(liveChannels[i].id, 100);
+    buildLiveIconTextures();
+}
+
+// Continue Watching is now its own full menu (Menu 2, touchable poster grid),
+// so unlike the rest of fast/no-art browsing it's worth fetching real posters:
+// the list is capped at a dozen items by getResumeItems(), so this stays one
+// bounded batch of requests rather than the N+1 a whole library would cost.
 static void fetchResume() {
-    resumeItems  = client.getResumeItems();
-    selResume    = 0;
-    resumeOffset = 0;
-    resumeFocus  = false;
+    resumeItems = client.getResumeItems();
+    selResume   = 0;
     resumeCoverData.assign(resumeItems.size(), std::string());
+    for (size_t i = 0; i < resumeItems.size(); i++)
+        resumeCoverData[i] = client.getPrimaryImage(resumeItems[i].id, 150);
     buildResumeTextures();
 }
 
@@ -160,6 +212,20 @@ static void pushLevel(const std::string& parentId, const std::string& title,
         lv.kind  = ChildKind::EpisodesRecursive;
         lv.items = client.getChildren(parentId, ChildKind::EpisodesRecursive);
     }
+    lv.coverData.assign(lv.items.size(), std::string());
+    browseStack.push_back(std::move(lv));
+    buildLevelCovers(browseStack.back());
+}
+
+// Push a level whose items are already in hand (search results) rather than
+// fetched by parentId — same bookkeeping as pushLevel, minus the network call.
+static void pushSearchResults(const std::string& title, std::vector<JellyfinItem> items) {
+    if (!browseStack.empty()) freeLevelCovers(browseStack.back());
+
+    BrowseLevel lv;
+    lv.title = title;
+    lv.kind  = ChildKind::Direct;
+    lv.items = std::move(items);
     lv.coverData.assign(lv.items.size(), std::string());
     browseStack.push_back(std::move(lv));
     buildLevelCovers(browseStack.back());
@@ -413,26 +479,44 @@ int main() {
                 case LOAD_LIBRARIES:
                     libraries  = client.getLibraries();
                     // Favorites is a cross-library Jellyfin user filter, exposed
-                    // as a synthetic tile just like Live TV.
+                    // as a synthetic tile. Live TV now has its own dedicated
+                    // menu (Menu 3) with a richer guide, so it's no longer
+                    // duplicated as a library tile here.
                     libraries.push_back({"__favorites__", "Favorites", "favorites"});
-                    // Live TV lives outside /Users/{id}/Views, so expose it as a
-                    // synthetic library tile and load its channel list on demand.
-                    libraries.push_back({"__livetv__", "Live TV", "livetv"});
                     selLib     = 0;
                     libOffset  = 0;
+                    homeMenu   = HOME_LIBRARIES;
+                    liveLoaded = false;   // re-fetch the guide next time Menu 3 opens
                     fetchLibCovers();   // network: cache JPEGs + build textures
                     fetchResume();      // Continue Watching list + poster art
                     state      = STATE_LIBRARIES;
                     break;
 
+                case LOAD_LIVETV:
+                    // Capped well below getLiveTvChannels()'s own 500 default:
+                    // unlike the old plain-text channel list, the guide fetches
+                    // one icon request per channel, so this bounds how long
+                    // "Loading Live TV guide..." takes on a large lineup.
+                    liveChannels = client.getLiveTvChannels(60);
+                    selLive      = 0;
+                    liveLoaded   = true;
+                    fetchLiveIcons();   // network: cache icon JPEGs + build textures
+                    state        = STATE_LIBRARIES;
+                    break;
+
+                case LOAD_SEARCH:
+                    pushSearchResults("Search: " + searchQuery,
+                                      client.searchSeries(searchQuery));
+                    state = STATE_ITEMS;
+                    break;
+
                 case LOAD_ITEMS:
                     clearBrowse();
                     {
-                    ChildKind rootKind = ChildKind::Direct;
-                    if (libraries[selLib].collectionType == "livetv")
-                        rootKind = ChildKind::LiveTvChannels;
-                    else if (libraries[selLib].collectionType == "favorites")
-                        rootKind = ChildKind::Favorites;
+                    // Live TV is no longer reached this way (it's Menu 3 now),
+                    // so the only synthetic tile left here is Favorites.
+                    ChildKind rootKind = libraries[selLib].collectionType == "favorites"
+                                       ? ChildKind::Favorites : ChildKind::Direct;
                     pushLevel(libraries[selLib].id, libraries[selLib].name,
                               rootKind);
                     }
@@ -536,30 +620,95 @@ int main() {
                 break;
 
             case STATE_LIBRARIES: {
-                if (kDown & KEY_X) {
-                    if (client.scansActive()) {
-                        state = STATE_SERVER_REFRESH;
-                        nextScanPoll = 0;
-                        break;
+                // L/R cycle the three home menus. A menu switch is a single
+                // discrete action (not something you'd want to auto-repeat),
+                // so kDown (press edge) rather than kHeld.
+                if (kDown & (KEY_L | KEY_R)) {
+                    int dir = (kDown & KEY_R) ? 1 : 2;   // +1 or -1 (mod 3)
+                    homeMenu = (HomeMenu)(((int)homeMenu + dir) % 3);
+                    if (homeMenu == HOME_CONTINUE) {
+                        fetchResume();   // pick up any progress made elsewhere
+                    } else if (homeMenu == HOME_LIVETV && !liveLoaded) {
+                        loadMsg = "Loading Live TV guide...";
+                        pending = LOAD_LIVETV;
+                        state   = STATE_LOADING;
                     }
-                    loadMsg = "Starting library and guide scans...";
-                    pending = LOAD_SERVER_REFRESH;
-                    state = STATE_LOADING;
                     break;
                 }
-                int n    = (int)libraries.size();
-                int cols = UI::GRID_COLS;
 
-                // Focus lives in the Continue Watching strip on the bottom screen.
-                if (resumeFocus) {
-                    int rn = (int)resumeItems.size();
-                    if (kDown & KEY_UP) { resumeFocus = false; break; }
-                    if (kDown & KEY_RIGHT && selResume < rn - 1) selResume++;
-                    if (kDown & KEY_LEFT  && selResume > 0)      selResume--;
-                    // Keep the selected poster within the visible window.
-                    if (selResume < resumeOffset) resumeOffset = selResume;
-                    if (selResume >= resumeOffset + UI::RESUME_VISIBLE)
-                        resumeOffset = selResume - UI::RESUME_VISIBLE + 1;
+                // Touch: edge-detected tap (KEY_TOUCH is a held state, so a
+                // prev-frame flag turns it into a single "just tapped" event).
+                // Tapping only moves the cursor, the same as a D-Pad/circle-pad
+                // press would — A is still what opens/plays/confirms.
+                bool touching = (hidKeysHeld() & KEY_TOUCH) != 0;
+                int  touchHit = -1;
+                bool touchSearch = false;
+                if (touching && !homeTouchWasHeld) {
+                    touchPosition touch; hidTouchRead(&touch);
+                    if (homeMenu == HOME_LIBRARIES && touch.px >= UI::BOT_W - 72 && touch.py < 24) {
+                        touchSearch = true;
+                    } else if (homeMenu == HOME_LIBRARIES) {
+                        touchHit = UI::hitTestBottomGrid(touch.px, touch.py,
+                                                          (int)libraries.size(), selLib);
+                    } else if (homeMenu == HOME_CONTINUE) {
+                        touchHit = UI::hitTestBottomGrid(touch.px, touch.py,
+                                                          (int)resumeItems.size(), selResume);
+                    } else {
+                        touchHit = UI::hitTestLiveList(touch.px, touch.py,
+                                                        (int)liveChannels.size(), selLive);
+                    }
+                }
+                homeTouchWasHeld = touching;
+
+                if (homeMenu == HOME_LIBRARIES) {
+                    if (kDown & KEY_X) {
+                        if (client.scansActive()) {
+                            state = STATE_SERVER_REFRESH;
+                            nextScanPoll = 0;
+                            break;
+                        }
+                        loadMsg = "Starting library and guide scans...";
+                        pending = LOAD_SERVER_REFRESH;
+                        state = STATE_LOADING;
+                        break;
+                    }
+                    if (touchSearch || (kDown & KEY_Y)) {
+                        std::string q = swkbdRead("Search series");
+                        if (!q.empty()) {
+                            searchQuery = q;
+                            loadMsg = "Searching \"" + q + "\"...";
+                            pending = LOAD_SEARCH;
+                            state   = STATE_LOADING;
+                        }
+                        break;
+                    }
+
+                    int n    = (int)libraries.size();
+                    int cols = UI::GRID_COLS;
+                    if (touchHit >= 0) selLib = touchHit;
+                    if (kDown & KEY_RIGHT && selLib < n - 1 && (selLib % cols) != cols - 1) selLib++;
+                    if (kDown & KEY_LEFT  && (selLib % cols) != 0)                          selLib--;
+                    if (kDown & KEY_DOWN  && selLib + cols < n)                             selLib += cols;
+                    if (kDown & KEY_UP    && selLib - cols >= 0)                            selLib -= cols;
+                    // Scroll so the selected row stays visible (libOffset is in rows).
+                    int selRow = selLib / cols;
+                    if (selRow < libOffset) libOffset = selRow;
+                    if (selRow >= libOffset + UI::GRID_ROWS_VISIBLE)
+                        libOffset = selRow - UI::GRID_ROWS_VISIBLE + 1;
+
+                    if (kDown & KEY_A && !libraries.empty()) {
+                        loadMsg = "Loading \"" + libraries[selLib].name + "\"...";
+                        pending = LOAD_ITEMS;
+                        state   = STATE_LOADING;
+                    }
+                } else if (homeMenu == HOME_CONTINUE) {
+                    int rn   = (int)resumeItems.size();
+                    int cols = UI::BGRID_COLS;
+                    if (touchHit >= 0) selResume = touchHit;
+                    if (kDown & KEY_RIGHT && selResume < rn - 1)   selResume++;
+                    if (kDown & KEY_LEFT  && selResume > 0)        selResume--;
+                    if (kDown & KEY_DOWN  && selResume + cols < rn) selResume += cols;
+                    if (kDown & KEY_UP    && selResume - cols >= 0) selResume -= cols;
                     if (kDown & KEY_A && rn > 0) {
                         shuffleActive = false;
                         preparePlayback(resumeItems[selResume], STATE_LIBRARIES);
@@ -580,26 +729,15 @@ int main() {
                         pending   = LOAD_TRACKS;
                         state     = STATE_LOADING;
                     }
-                    break;
-                }
-
-                if (kDown & KEY_RIGHT && selLib < n - 1 && (selLib % cols) != cols - 1) selLib++;
-                if (kDown & KEY_LEFT  && (selLib % cols) != 0)                          selLib--;
-                if (kDown & KEY_DOWN  && selLib + cols < n)                             selLib += cols;
-                if (kDown & KEY_UP    && selLib - cols >= 0)                            selLib -= cols;
-                // DOWN with no grid row below drops focus into the Continue Watching strip.
-                if (kDown & KEY_DOWN && selLib + cols >= n && !resumeItems.empty())
-                    resumeFocus = true;
-                // Scroll so the selected row stays visible (libOffset is in rows).
-                int selRow = selLib / cols;
-                if (selRow < libOffset) libOffset = selRow;
-                if (selRow >= libOffset + UI::GRID_ROWS_VISIBLE)
-                    libOffset = selRow - UI::GRID_ROWS_VISIBLE + 1;
-
-                if (kDown & KEY_A && !libraries.empty()) {
-                    loadMsg = "Loading \"" + libraries[selLib].name + "\"...";
-                    pending = LOAD_ITEMS;
-                    state   = STATE_LOADING;
+                } else { // HOME_LIVETV
+                    int n = (int)liveChannels.size();
+                    if (touchHit >= 0) selLive = touchHit;
+                    if (kDown & KEY_DOWN && selLive < n - 1) selLive++;
+                    if (kDown & KEY_UP   && selLive > 0)     selLive--;
+                    if (kDown & KEY_A && n > 0) {
+                        shuffleActive = false;
+                        preparePlayback(liveChannels[selLive], STATE_LIBRARIES);
+                    }
                 }
                 break;
             }
@@ -614,6 +752,17 @@ int main() {
                 BrowseLevel& lv = browseStack.back();
                 int n    = (int)lv.items.size();
                 int cols = UI::ITEM_GRID_COLS;
+
+                // Touch: tap a card in the bottom-screen mirror grid to select it
+                // (see STATE_LIBRARIES above for the same edge-detected pattern).
+                bool touching = (hidKeysHeld() & KEY_TOUCH) != 0;
+                if (touching && !itemsTouchWasHeld) {
+                    touchPosition touch; hidTouchRead(&touch);
+                    int hit = UI::hitTestBottomGrid(touch.px, touch.py, n, lv.sel);
+                    if (hit >= 0) lv.sel = hit;
+                }
+                itemsTouchWasHeld = touching;
+
                 if (kDown & KEY_RIGHT && lv.sel < n - 1 && (lv.sel % cols) != cols - 1) lv.sel++;
                 if (kDown & KEY_LEFT  && (lv.sel % cols) != 0)                          lv.sel--;
                 if (kDown & KEY_DOWN  && lv.sel + cols < n)                             lv.sel += cols;
@@ -732,6 +881,7 @@ int main() {
             case STATE_PLAYER: {
                 freeLibCovers();      // textures live in VRAM that playback tears down
                 freeResumeCovers();
+                freeLiveIcons();
                 if (!browseStack.empty()) freeLevelCovers(browseStack.back());
                 // Azahar retains a render target's screen-output binding after
                 // C3D_Fini. Detach explicitly so playback can own both screens.
@@ -797,6 +947,7 @@ int main() {
                 new (&ui) UI(topScreen, botScreen);
                 buildCoverTextures();    // rebuild from cached JPEG bytes (no re-fetch)
                 buildResumeTextures();
+                buildLiveIconTextures();
                 if (!browseStack.empty()) buildLevelCovers(browseStack.back());
                 state = playReturn;
                 break;
@@ -832,9 +983,12 @@ int main() {
                 ui.drawServerRefreshScreen(client.scanProgress(), client.scansCompleted());
                 break;
             case STATE_LIBRARIES:
-                ui.drawLibraryGrid(libraries, libCovers, selLib, libOffset,
-                                   resumeItems, resumeCovers,
-                                   selResume, resumeOffset, resumeFocus);
+                if (homeMenu == HOME_LIBRARIES)
+                    ui.drawLibraryGrid(libraries, libCovers, selLib, libOffset);
+                else if (homeMenu == HOME_CONTINUE)
+                    ui.drawContinueWatchingMenu(resumeItems, resumeCovers, selResume);
+                else
+                    ui.drawLiveTvGuide(liveChannels, liveChannelIcons, selLive);
                 break;
             case STATE_ITEMS: {
                 BrowseLevel& lv = browseStack.back();
@@ -880,6 +1034,7 @@ int main() {
 
     freeLibCovers();
     freeResumeCovers();
+    freeLiveIcons();
     clearBrowse();
     C2D_Fini();
     C3D_Fini();

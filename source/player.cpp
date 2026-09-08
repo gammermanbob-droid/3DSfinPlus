@@ -1311,6 +1311,7 @@ bool playerPlay(const std::string& url, long long runTimeTicks,
                                  // hidScanInput calls would eat hidKeysDown edges)
     bool paused    = false;      // A toggles: demux, decode, blit and DSP all halt
     bool pausePrevA = false;     // edge-detect for A (held-based, as above)
+    bool touchWasHeld = false;    // edge-detect for touch taps (held-based, as above)
     s64  pausedAt  = 0;          // osGetTime() when the pause began
 
     // Seek-bar state: position from PES PTS, total from the Jellyfin item.
@@ -1399,6 +1400,48 @@ bool playerPlay(const std::string& url, long long runTimeTicks,
             seekReq = t;
         }
         seekPrevL = skL; seekPrevR = skR;
+
+        // Touch controls: tap the seek bar to jump there, or tap the HUD icons
+        // for -10s/+30s/pause/back, mirroring the D-Pad/A/B shortcuts above.
+        // Edge-detected the same way as the buttons above (hidScanInput() runs
+        // every loop iteration, so a held-based prev-frame flag is required).
+        bool touching = (hidKeysHeld() & KEY_TOUCH) != 0;
+        bool tapPause = false, tapBack = false, tapLeft = false, tapRight = false;
+        bool tapSeek  = false;
+        double tapSeekFrac = 0;
+        if (touching && !touchWasHeld) {
+            touchPosition touch; hidTouchRead(&touch);
+            if (touch.py >= 113 && touch.py < 137) {
+                tapSeek = true;
+                tapSeekFrac = (touch.px - 12.0) / 296.0;
+                if (tapSeekFrac < 0) tapSeekFrac = 0;
+                if (tapSeekFrac > 1) tapSeekFrac = 1;
+            } else if (touch.px < 95 && touch.py >= 140 && touch.py < 215) {
+                tapLeft = true;
+            } else if (touch.px >= 126 && touch.px <= 194 && touch.py >= 140 && touch.py < 198) {
+                tapPause = true;
+            } else if (touch.px >= 220 && touch.py >= 140 && touch.py < 189) {
+                tapRight = true;
+            } else if (touch.px >= 220 && touch.py >= 190 && touch.py < 238) {
+                tapBack = true;
+            }
+        }
+        touchWasHeld = touching;
+
+        if (tapBack) { stop = true; break; }
+
+        if (durSec > 0 && tapSeek) {
+            double t = tapSeekFrac * durSec;
+            if (t > durSec - 10.0) t = durSec - 10.0;
+            if (t < 0) t = 0;
+            seekReq = t;
+        } else if (durSec > 0 && (tapLeft || tapRight)) {
+            double t = posSec + (tapRight ? 30.0 : -10.0);
+            if (t > durSec - 10.0) t = durSec - 10.0;
+            if (t < 0) t = 0;
+            seekReq = t;
+        }
+
         if (seekReq >= 0) {
             // Same slot as the buffering hint. It stays up through teardown and
             // the caller's restart — the next playerPlay's consoleInit clears it
@@ -1416,7 +1459,7 @@ bool playerPlay(const std::string& url, long long runTimeTicks,
         // The download thread keeps filling the ring and naps once it is full, so
         // a pause applies HTTP backpressure to the transcode rather than losing data.
         bool aHeld = (hidKeysHeld() & KEY_A) != 0;
-        if (aHeld && !pausePrevA) {
+        if ((aHeld && !pausePrevA) || tapPause) {
             paused = !paused;
             audio::setPaused(paused);
             if (paused) {

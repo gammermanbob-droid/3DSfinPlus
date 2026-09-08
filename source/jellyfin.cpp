@@ -380,6 +380,7 @@ std::vector<JellyfinItem> JellyfinClient::getChildren(const std::string& parentI
                  "?UserId=%s"
                  "&Fields=PrimaryImageAspectRatio"
                  "&EnableImages=true"
+                 "&AddCurrentProgram=true"
                  "&SortBy=SortName&SortOrder=Ascending"
                  "&Limit=%d",
                  userId_.c_str(), limit);
@@ -478,6 +479,13 @@ std::vector<JellyfinItem> JellyfinClient::getChildren(const std::string& parentI
         std::string pos = jStr(obj, "PlaybackPositionTicks");
         if (!pos.empty()) item.resumeTicks = std::stoll(pos);
 
+        // Live TV guide: the program airing right now (AddCurrentProgram=true
+        // above nests it as its own object; no look-ahead is requested).
+        if (kind == ChildKind::LiveTvChannels) {
+            std::string prog = jObj(obj, "CurrentProgram");
+            if (!prog.empty()) item.currentProgram = jStr(prog, "Name");
+        }
+
         if (!item.id.empty()) result.push_back(item);
     });
     return result;
@@ -485,6 +493,65 @@ std::vector<JellyfinItem> JellyfinClient::getChildren(const std::string& parentI
 
 std::vector<JellyfinItem> JellyfinClient::getLiveTvChannels(int limit) {
     return getChildren(std::string(), ChildKind::LiveTvChannels, limit);
+}
+
+// Percent-encodes a search term for a URL query value. Jellyfin's searchTerm
+// is plain text (titles), so only the handful of characters that break a query
+// string need escaping; everything else passes through untouched.
+static std::string urlEncodeQuery(const std::string& s) {
+    static const char* hex = "0123456789ABCDEF";
+    std::string out;
+    for (unsigned char c : s) {
+        bool safe = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+                    (c >= '0' && c <= '9') || c == '-' || c == '_' || c == '.' || c == '~';
+        if (safe) {
+            out += (char)c;
+        } else if (c == ' ') {
+            out += '+';
+        } else {
+            out += '%';
+            out += hex[(c >> 4) & 0xF];
+            out += hex[c & 0xF];
+        }
+    }
+    return out;
+}
+
+std::vector<JellyfinItem> JellyfinClient::searchSeries(const std::string& query, int limit) {
+    std::vector<JellyfinItem> result;
+    if (query.empty()) return result;
+
+    std::string encoded = urlEncodeQuery(query);
+    char path[768];
+    snprintf(path, sizeof(path),
+             "/Users/%s/Items"
+             "?searchTerm=%s"
+             "&IncludeItemTypes=Series"
+             "&Recursive=true"
+             "&Fields=RunTimeTicks,ProductionYear"
+             "&SortBy=SortName&SortOrder=Ascending"
+             "&Limit=%d",
+             userId_.c_str(), encoded.c_str(), limit);
+
+    auto resp = http_.get(path);
+    if (!resp.ok()) return result;
+
+    std::string arr = jArr(resp.body, "Items");
+    jForEach(arr, [&](const std::string& obj) {
+        JellyfinItem item;
+        item.id             = jStr(obj, "Id");
+        item.name           = jStr(obj, "Name");
+        item.type           = jStr(obj, "Type");
+        item.productionYear = 0;
+        item.runTimeTicks   = 0;
+        item.resumeTicks    = 0;
+
+        std::string year = jStr(obj, "ProductionYear");
+        if (!year.empty()) item.productionYear = std::stoi(year);
+
+        if (!item.id.empty()) result.push_back(item);
+    });
+    return result;
 }
 
 std::vector<JellyfinItem> JellyfinClient::getResumeItems(int limit) {

@@ -250,84 +250,171 @@ static void drawImageCover(const C2D_Image& im, float x, float y, float w, float
     C2D_DrawImageAt(cropped, x, y, 0.0f, nullptr, w / (float)st.width, h / (float)st.height);
 }
 
-// Bottom-screen "Continue Watching" poster strip for the library grid view.
-void UI::drawResumeStrip(const std::vector<JellyfinItem>& resume,
-                         const std::vector<C2D_Image>& covers,
-                         int sel, int offset, bool focus) {
-    drawText("Continue Watching", 8, 6, 0.50f, focus ? COL_WHITE : COL_GREY);
-
-    if (resume.empty()) {
-        drawText("Nothing in progress", 8, 100, 0.46f, COL_GREY);
+// Bottom-screen touchable card grid shared by the library, item, and Continue
+// Watching menus. The visible page is derived from `selected` rather than a
+// separately-tracked offset, so drawing and hitTestBottomGrid() can never drift
+// apart: whichever card is selected is always on-screen, on both.
+void UI::drawBottomMirrorGrid(const std::vector<C2D_Image>& covers,
+                              const std::vector<std::string>& labels,
+                              int count, int selected,
+                              bool showProgress,
+                              const std::vector<float>* progressFrac) {
+    if (count <= 0) {
+        drawText("(nothing here)", 8, 100, 0.46f, COL_GREY);
         return;
     }
 
-    const int   vis    = RESUME_VISIBLE;
-    const float mx     = 8.0f;
-    const float gap    = 8.0f;
-    const float cardW  = (BOT_W - 2 * mx - (vis - 1) * gap) / vis;  // ~70
-    const float postH  = 104.0f;
-    const float top    = 28.0f;
+    const int perPage = BGRID_COLS * BGRID_ROWS_V;
+    int page = (selected >= 0 ? selected : 0) / perPage;
+    int base = page * perPage;
 
-    for (int i = 0; i < vis; i++) {
-        int idx = offset + i;
-        if (idx >= (int)resume.size()) break;
+    for (int i = 0; i < perPage; i++) {
+        int idx = base + i;
+        if (idx >= count) break;
 
-        float x   = mx + i * (cardW + gap);
-        bool  hl  = focus && idx == sel;
+        int   c = i % BGRID_COLS, r = i / BGRID_COLS;
+        float x = BGRID_MX + c * (BGRID_CARD_W + BGRID_GAP);
+        float y = BGRID_MY + r * BGRID_PITCH_Y;
+        bool  sel = (idx == selected);
 
-        if (hl) drawRect(x - 3, top - 3, cardW + 6, postH + 6, COL_SEL);
+        if (sel) drawRect(x - 2, y - 2, BGRID_CARD_W + 4, BGRID_CARD_H + 4, COL_SEL);
 
         bool hasImg = (idx < (int)covers.size() && covers[idx].tex != nullptr);
-        if (hasImg) drawImageCover(covers[idx], x, top, cardW, postH);
-        else        drawRect(x, top, cardW, postH, COL_ROW_ALT);
+        if (hasImg) drawImageCover(covers[idx], x, y, BGRID_CARD_W, BGRID_CARD_H);
+        else        drawRect(x, y, BGRID_CARD_W, BGRID_CARD_H, COL_ROW_ALT);
 
-        // Progress bar pinned to the bottom of the poster.
-        float frac = 0.0f;
-        if (resume[idx].runTimeTicks > 0)
-            frac = (float)resume[idx].resumeTicks / (float)resume[idx].runTimeTicks;
-        if (frac < 0.0f) frac = 0.0f;
-        if (frac > 1.0f) frac = 1.0f;
-        drawRect(x, top + postH - 5, cardW,        5, C2D_Color32(0, 0, 0, 0xC0));
-        drawRect(x, top + postH - 5, cardW * frac, 5, COL_YELLOW);
+        if (showProgress && progressFrac && idx < (int)progressFrac->size()) {
+            float frac = (*progressFrac)[idx];
+            if (frac > 0.0f) {
+                if (frac > 1.0f) frac = 1.0f;
+                drawRect(x, y + BGRID_CARD_H - 4, BGRID_CARD_W,        4, C2D_Color32(0,0,0,0xC0));
+                drawRect(x, y + BGRID_CARD_H - 4, BGRID_CARD_W * frac, 4, COL_YELLOW);
+            }
+        }
 
-        // Episodes read better as series name; movies use their own title.
-        const std::string& label = !resume[idx].seriesName.empty()
-                                  ? resume[idx].seriesName : resume[idx].name;
-        drawTextBuf(label, x, top + postH + 4, 0.40f,
-                    hl ? COL_WHITE : COL_GREY, cardW);
+        drawRect(x, y + BGRID_CARD_H - 16, BGRID_CARD_W, 16, C2D_Color32(0, 0, 0, 0xB0));
+        if (idx < (int)labels.size())
+            drawTextBuf(labels[idx], x + 3, y + BGRID_CARD_H - 14, 0.34f, COL_WHITE, BGRID_CARD_W - 6);
     }
 
-    // Horizontal scroll indicator when more items exist than fit.
-    if ((int)resume.size() > vis) {
-        float barW   = BOT_W - 16;
-        float thumbW = barW * vis / resume.size();
-        float thumbX = 8 + barW * offset / resume.size();
-        float y      = top + postH + 22;
-        drawRect(8,      y, barW,   3, COL_ROW_ALT);
-        drawRect(thumbX, y, thumbW, 3, COL_GREY);
+    int totalPages = (count + perPage - 1) / perPage;
+    if (totalPages > 1) {
+        float barH   = BOT_H - BGRID_MY - 6;
+        float thumbH = barH / totalPages;
+        float thumbY = BGRID_MY + thumbH * page;
+        drawRect(BOT_W - 4, BGRID_MY, 4, barH,   COL_ROW_ALT);
+        drawRect(BOT_W - 4, thumbY,   4, thumbH, COL_GREY);
     }
+}
+
+// Bottom-screen touchable channel list for the Live TV guide. Same
+// selection-derives-the-page rule as drawBottomMirrorGrid.
+void UI::drawLiveTvRows(const std::vector<JellyfinItem>& channels,
+                        const std::vector<C2D_Image>& icons,
+                        int selected) {
+    if (channels.empty()) {
+        drawText("(no channels found)", 8, 100, 0.46f, COL_GREY);
+        return;
+    }
+
+    int page = (selected >= 0 ? selected : 0) / LIVE_ROWS_V;
+    int base = page * LIVE_ROWS_V;
+
+    for (int i = 0; i < LIVE_ROWS_V; i++) {
+        int idx = base + i;
+        if (idx >= (int)channels.size()) break;
+
+        float y   = LIVE_ROW_Y0 + i * LIVE_ROW_H;
+        bool  sel = (idx == selected);
+        drawRect(0, y, BOT_W, LIVE_ROW_H - 2,
+                 sel ? COL_SEL : (i % 2 == 0 ? COL_BG_BOT : COL_ROW_ALT));
+
+        bool hasImg = (idx < (int)icons.size() && icons[idx].tex != nullptr);
+        if (hasImg) drawImageCover(icons[idx], 6, y + 4, 38, 38);
+        else        drawRect(6, y + 4, 38, 38, COL_ROW_ALT);
+
+        drawTextBuf(channels[idx].name, 52, y + 3, 0.44f, COL_WHITE, BOT_W - 60);
+        const std::string& prog = channels[idx].currentProgram;
+        drawTextBuf(prog.empty() ? "No programme data" : prog,
+                    52, y + 23, 0.36f, COL_GREY, BOT_W - 60);
+    }
+
+    int totalPages = ((int)channels.size() + LIVE_ROWS_V - 1) / LIVE_ROWS_V;
+    if (totalPages > 1) {
+        float barH   = LIVE_ROWS_V * LIVE_ROW_H;
+        float thumbH = barH / totalPages;
+        float thumbY = LIVE_ROW_Y0 + thumbH * page;
+        drawRect(BOT_W - 4, LIVE_ROW_Y0, 4, barH,   COL_ROW_ALT);
+        drawRect(BOT_W - 4, thumbY,      4, thumbH, COL_GREY);
+    }
+}
+
+// Tab strip shown on the top screen of all three home menus.
+void UI::drawHomeMenuTabs(HomeMenuTab active) {
+    const char* names[3] = {"Library", "Continue Watching", "Live TV"};
+    float y = 24.0f;
+    drawRect(0, y, TOP_W, 20, COL_BG);
+    float x = 8.0f;
+    for (int i = 0; i < 3; i++) {
+        u32 col = (i == (int)active) ? COL_YELLOW : COL_GREY;
+        std::string label = std::string(i == (int)active ? "> " : "  ") + names[i];
+        drawText(label, x, y + 2, 0.40f, col);
+        x += 132.0f;
+    }
+    drawText("L/R", TOP_W - 34, y + 2, 0.38f, COL_GREY);
+}
+
+int UI::hitTestBottomGrid(int touchX, int touchY, int count, int selected) {
+    if (count <= 0) return -1;
+    const int perPage = BGRID_COLS * BGRID_ROWS_V;
+    int page = (selected >= 0 ? selected : 0) / perPage;
+    int base = page * perPage;
+
+    if (touchX < BGRID_MX || touchY < BGRID_MY) return -1;
+    float relX = touchX - BGRID_MX;
+    float relY = touchY - BGRID_MY;
+    int c = (int)(relX / (BGRID_CARD_W + BGRID_GAP));
+    int r = (int)(relY / BGRID_PITCH_Y);
+    if (c < 0 || c >= BGRID_COLS || r < 0 || r >= BGRID_ROWS_V) return -1;
+    // Reject a tap landing in the gap between cards rather than on one.
+    if (relX - c * (BGRID_CARD_W + BGRID_GAP) > BGRID_CARD_W) return -1;
+    if (relY - r * BGRID_PITCH_Y > BGRID_CARD_H) return -1;
+
+    int idx = base + r * BGRID_COLS + c;
+    if (idx < 0 || idx >= count) return -1;
+    return idx;
+}
+
+int UI::hitTestLiveList(int touchX, int touchY, int count, int selected) {
+    if (count <= 0) return -1;
+    if (touchX < 0 || touchX >= BOT_W || touchY < LIVE_ROW_Y0) return -1;
+    int page = (selected >= 0 ? selected : 0) / LIVE_ROWS_V;
+    int base = page * LIVE_ROWS_V;
+    int row = (int)((touchY - LIVE_ROW_Y0) / LIVE_ROW_H);
+    if (row < 0 || row >= LIVE_ROWS_V) return -1;
+    int idx = base + row;
+    if (idx < 0 || idx >= count) return -1;
+    return idx;
 }
 
 void UI::drawLibraryGrid(const std::vector<JellyfinLibrary>& libs,
                          const std::vector<C2D_Image>& covers,
-                         int selected, int offset,
-                         const std::vector<JellyfinItem>& resume,
-                         const std::vector<C2D_Image>& resumeCovers,
-                         int resumeSel, int resumeOffset, bool resumeFocus) {
+                         int selected, int offset) {
     C2D_SceneBegin(top_);
     drawTopBar("Libraries");
+    drawHomeMenuTabs(TAB_LIBRARY);
 
     const int   cols   = GRID_COLS;
     const int   rowsV  = GRID_ROWS_VISIBLE;
     const float mx     = 10.0f;   // left/right margin
-    const float my     = 30.0f;   // top of grid (below the bar)
+    const float my     = 50.0f;   // top of grid (below the bar + tab strip)
     const float gap    = 10.0f;   // gap between cards
     const float cardW  = (TOP_W - 2 * mx - (cols - 1) * gap) / cols;  // ~185
-    const float cardH  = 92.0f;
-    const float pitchY = cardH + 12.0f;
+    const float cardH  = 80.0f;
+    const float pitchY = cardH + 10.0f;
 
     if (libs.empty()) {
-        drawText("(no libraries found)", 8, 110, 0.50f, COL_GREY);
+        drawText("(no libraries found)", 8, 130, 0.50f, COL_GREY);
     }
 
     for (int i = 0; i < cols * rowsV; i++) {
@@ -337,10 +424,7 @@ void UI::drawLibraryGrid(const std::vector<JellyfinLibrary>& libs,
         int   c = i % cols, r = i / cols;
         float x = mx + c * (cardW + gap);
         float y = my + r * pitchY;
-        // Only the focused screen shows a selection: once the d-pad moves down
-        // into the resume strip, the grid drops its outline (mirrors the way
-        // drawResumeStrip gates its own highlight on focus).
-        bool  sel = !resumeFocus && idx == selected;
+        bool  sel = idx == selected;
 
         if (sel) drawRect(x - 3, y - 3, cardW + 6, cardH + 6, COL_SEL);
 
@@ -352,32 +436,128 @@ void UI::drawLibraryGrid(const std::vector<JellyfinLibrary>& libs,
         }
 
         // Name strip across the bottom of the card.
-        drawRect(x, y + cardH - 22, cardW, 22, C2D_Color32(0, 0, 0, 0xB0));
-        drawTextBuf(libs[idx].name, x + 6, y + cardH - 19, 0.46f, COL_WHITE, cardW - 12);
+        drawRect(x, y + cardH - 20, cardW, 20, C2D_Color32(0, 0, 0, 0xB0));
+        drawTextBuf(libs[idx].name, x + 6, y + cardH - 18, 0.44f, COL_WHITE, cardW - 12);
     }
 
     // Scrollbar when there are more rows than fit.
     int totalRows = ((int)libs.size() + cols - 1) / cols;
     if (totalRows > rowsV) {
-        float barH   = TOP_H - 26;
+        float barH   = TOP_H - my;
         float thumbH = barH * rowsV / totalRows;
-        float thumbY = 26 + barH * offset / totalRows;
-        drawRect(TOP_W - 4, 26,     4, barH,   COL_ROW_ALT);
+        float thumbY = my + barH * offset / totalRows;
+        drawRect(TOP_W - 4, my,     4, barH,   COL_ROW_ALT);
         drawRect(TOP_W - 4, thumbY, 4, thumbH, COL_GREY);
+    }
+
+    // Bottom screen: the same grid, mirrored and touchable (the top screen has
+    // no digitizer, so this is the only way to select a library by tapping it).
+    C2D_SceneBegin(bot_);
+    drawRect(0, 0, BOT_W, BOT_H, COL_BG_BOT);
+
+    std::vector<std::string> labels;
+    labels.reserve(libs.size());
+    for (const auto& l : libs) labels.push_back(l.name);
+    drawBottomMirrorGrid(covers, labels, (int)libs.size(), selected);
+
+    // Search button (series only), top-right corner.
+    drawRect(BOT_W - 72, 2, 68, 20, COL_BAR);
+    drawText("Search", BOT_W - 64, 5, 0.38f, COL_WHITE);
+
+    drawBottomHints("A: Open  Y: Search  X: Scan  L/R: Menu");
+}
+
+// Continue Watching menu (Menu 2). Top screen: a detail panel for the
+// highlighted item. Bottom screen: the touchable poster grid.
+void UI::drawContinueWatchingMenu(const std::vector<JellyfinItem>& resume,
+                                  const std::vector<C2D_Image>& covers,
+                                  int selected) {
+    C2D_SceneBegin(top_);
+    drawTopBar("Continue Watching");
+    drawHomeMenuTabs(TAB_CONTINUE);
+
+    if (resume.empty()) {
+        drawText("Nothing in progress.", 12, 110, 0.52f, COL_GREY);
+    } else if (selected >= 0 && selected < (int)resume.size()) {
+        const auto& it = resume[selected];
+        bool hasImg = selected < (int)covers.size() && covers[selected].tex != nullptr;
+        float px = 12, py = 50, pw = 130, ph = 170;
+        if (hasImg) drawImageCover(covers[selected], px, py, pw, ph);
+        else        drawRect(px, py, pw, ph, COL_ROW_ALT);
+
+        float tx = px + pw + 16;
+        const std::string& title = !it.seriesName.empty() ? it.seriesName : it.name;
+        drawTextBuf(title, tx, py + 4, 0.52f, COL_WHITE, TOP_W - tx - 10);
+        if (!it.seriesName.empty())
+            drawTextBuf(it.name, tx, py + 30, 0.42f, COL_GREY, TOP_W - tx - 10);
+
+        if (it.productionYear > 0) {
+            char yr[32];
+            snprintf(yr, sizeof(yr), "Year: %d", it.productionYear);
+            drawText(yr, tx, py + 58, 0.42f, COL_GREY);
+        }
+        std::string dur = formatDuration(it.runTimeTicks);
+        if (!dur.empty()) drawText("Duration: " + dur, tx, py + 80, 0.42f, COL_GREY);
+
+        if (it.runTimeTicks > 0) {
+            float frac = (float)it.resumeTicks / (float)it.runTimeTicks;
+            if (frac < 0.0f) frac = 0.0f;
+            if (frac > 1.0f) frac = 1.0f;
+            char pct[24];
+            snprintf(pct, sizeof(pct), "%.0f%% watched", frac * 100.0f);
+            drawText(pct, tx, py + 102, 0.42f, COL_YELLOW);
+            drawRect(tx, py + 124, TOP_W - tx - 20, 8, COL_ROW_ALT);
+            drawRect(tx, py + 124, (TOP_W - tx - 20) * frac, 8, COL_YELLOW);
+        }
     }
 
     C2D_SceneBegin(bot_);
     drawRect(0, 0, BOT_W, BOT_H, COL_BG_BOT);
-    drawResumeStrip(resume, resumeCovers, resumeSel, resumeOffset, resumeFocus);
 
-    drawText("X: Scan libraries + guide", 6, BOT_H - 38, 0.42f, COL_GREY);
+    std::vector<std::string> labels;
+    std::vector<float>       frac;
+    labels.reserve(resume.size());
+    frac.reserve(resume.size());
+    for (const auto& it : resume) {
+        labels.push_back(!it.seriesName.empty() ? it.seriesName : it.name);
+        frac.push_back(it.runTimeTicks > 0
+                      ? (float)it.resumeTicks / (float)it.runTimeTicks : 0.0f);
+    }
+    drawBottomMirrorGrid(covers, labels, (int)resume.size(), selected, true, &frac);
 
-    if (resumeFocus)
-        drawBottomHints("A: Play  SELECT: Audio  Y: Subtitles");
-    else if (!resume.empty())
-        drawBottomHints("A: Open   D-Pad: Move   DOWN: Continue Watching");
-    else
-        drawBottomHints("A: Open   D-Pad: Move   START: Quit");
+    drawBottomHints(resume.empty() ? "L/R: Menu"
+                                    : "A: Play  Y: Subtitles  SELECT: Audio  L/R: Menu");
+}
+
+// Live TV guide (Menu 3). Top screen: the highlighted channel's icon, name,
+// and current programme. Bottom screen: the touchable channel list.
+void UI::drawLiveTvGuide(const std::vector<JellyfinItem>& channels,
+                         const std::vector<C2D_Image>& icons,
+                         int selected) {
+    C2D_SceneBegin(top_);
+    drawTopBar("Live TV Guide");
+    drawHomeMenuTabs(TAB_LIVETV);
+
+    if (channels.empty()) {
+        drawText("No Live TV channels found.", 12, 110, 0.50f, COL_GREY);
+    } else if (selected >= 0 && selected < (int)channels.size()) {
+        const auto& ch = channels[selected];
+        bool hasImg = selected < (int)icons.size() && icons[selected].tex != nullptr;
+        float ix = 12, iy = 50, iw = 120, ih = 120;
+        if (hasImg) drawImageCover(icons[selected], ix, iy, iw, ih);
+        else        drawRect(ix, iy, iw, ih, COL_ROW_ALT);
+
+        float tx = ix + iw + 18;
+        drawTextBuf(ch.name, tx, iy + 6, 0.56f, COL_WHITE, TOP_W - tx - 10);
+        drawText("Now playing:", tx, iy + 44, 0.42f, COL_GREY);
+        drawTextBuf(ch.currentProgram.empty() ? "(no programme data)" : ch.currentProgram,
+                    tx, iy + 66, 0.46f, COL_YELLOW, TOP_W - tx - 10);
+    }
+
+    C2D_SceneBegin(bot_);
+    drawRect(0, 0, BOT_W, BOT_H, COL_BG_BOT);
+    drawLiveTvRows(channels, icons, selected);
+    drawBottomHints(channels.empty() ? "L/R: Menu" : "A: Watch Live   L/R: Menu");
 }
 
 void UI::drawItemGrid(const std::vector<JellyfinItem>& items,
@@ -437,21 +617,35 @@ void UI::drawItemGrid(const std::vector<JellyfinItem>& items,
         drawRect(TOP_W - 4, thumbY, 4, thumbH, COL_GREY);
     }
 
-    // Bottom screen: metadata for the selected item.
+    // Bottom screen: the same grid, mirrored and touchable, with a one-line
+    // metadata strip for the selected item beneath it.
     C2D_SceneBegin(bot_);
     drawRect(0, 0, BOT_W, BOT_H, COL_BG_BOT);
 
+    {
+        std::vector<std::string> labels;
+        labels.reserve(items.size());
+        std::vector<float> frac;
+        frac.reserve(items.size());
+        for (const auto& it : items) {
+            labels.push_back(it.name);
+            frac.push_back(it.runTimeTicks > 0
+                          ? (float)it.resumeTicks / (float)it.runTimeTicks : 0.0f);
+        }
+        drawBottomMirrorGrid(covers, labels, (int)items.size(), selected, true, &frac);
+    }
+
     if (!items.empty() && selected < (int)items.size()) {
         auto& it = items[selected];
-        drawText(truncate(it.name, 30), 8, 20, 0.52f, COL_WHITE);
+        std::string meta = it.type;
         if (it.productionYear > 0) {
-            char yr[32];
-            snprintf(yr, sizeof(yr), "Year: %d", it.productionYear);
-            drawText(yr, 8, 48, 0.48f, COL_GREY);
+            char yr[16];
+            snprintf(yr, sizeof(yr), "  %d", it.productionYear);
+            meta += yr;
         }
         std::string dur = formatDuration(it.runTimeTicks);
-        if (!dur.empty()) drawText("Duration: " + dur, 8, 70, 0.48f, COL_GREY);
-        drawText("Type: " + it.type, 8, 92, 0.48f, COL_GREY);
+        if (!dur.empty()) meta += "  " + dur;
+        drawTextBuf(truncate(it.name, 34) + "  -  " + meta, 8, 196, 0.36f, COL_GREY, BOT_W - 16);
     }
 
     // Series, seasons, artists, albums, and folders drill in; media plays.
