@@ -55,7 +55,7 @@ static std::string errorMsg;
 static std::vector<JellyfinLibrary> libraries;
 static std::vector<C2D_Image>       libCovers;     // GPU textures, parallel to libraries
 static std::vector<std::string>     libCoverData;  // raw JPEG bytes cache (survives C3D_Fini)
-static int selLib  = 0, libOffset  = 0;
+static int selLib  = 0;
 
 // One level of the library → series → episodes browse hierarchy. coverData (raw
 // JPEG bytes) is cached so textures can be rebuilt after playback frees VRAM and
@@ -484,7 +484,6 @@ int main() {
                     // duplicated as a library tile here.
                     libraries.push_back({"__favorites__", "Favorites", "favorites"});
                     selLib     = 0;
-                    libOffset  = 0;
                     homeMenu   = HOME_LIBRARIES;
                     liveLoaded = false;   // re-fetch the guide next time Menu 3 opens
                     fetchLibCovers();   // network: cache JPEGs + build textures
@@ -683,18 +682,17 @@ int main() {
                         break;
                     }
 
+                    // BGRID_COLS (not a separate top-screen column count): the
+                    // library grid now lives only on the bottom screen, whose
+                    // own paging (see drawBottomMirrorGrid) is derived from
+                    // selLib directly, so no separate scroll-offset is tracked.
                     int n    = (int)libraries.size();
-                    int cols = UI::GRID_COLS;
+                    int cols = UI::BGRID_COLS;
                     if (touchHit >= 0) selLib = touchHit;
                     if (kDown & KEY_RIGHT && selLib < n - 1 && (selLib % cols) != cols - 1) selLib++;
                     if (kDown & KEY_LEFT  && (selLib % cols) != 0)                          selLib--;
                     if (kDown & KEY_DOWN  && selLib + cols < n)                             selLib += cols;
                     if (kDown & KEY_UP    && selLib - cols >= 0)                            selLib -= cols;
-                    // Scroll so the selected row stays visible (libOffset is in rows).
-                    int selRow = selLib / cols;
-                    if (selRow < libOffset) libOffset = selRow;
-                    if (selRow >= libOffset + UI::GRID_ROWS_VISIBLE)
-                        libOffset = selRow - UI::GRID_ROWS_VISIBLE + 1;
 
                     if (kDown & KEY_A && !libraries.empty()) {
                         loadMsg = "Loading \"" + libraries[selLib].name + "\"...";
@@ -984,7 +982,7 @@ int main() {
                 break;
             case STATE_LIBRARIES:
                 if (homeMenu == HOME_LIBRARIES)
-                    ui.drawLibraryGrid(libraries, libCovers, selLib, libOffset);
+                    ui.drawLibraryGrid(libraries, libCovers, selLib);
                 else if (homeMenu == HOME_CONTINUE)
                     ui.drawContinueWatchingMenu(resumeItems, resumeCovers, selResume);
                 else

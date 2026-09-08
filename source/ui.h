@@ -13,12 +13,12 @@ public:
     static constexpr int BOT_W         = 320;
     static constexpr int BOT_H         = 240;
 
-    // Library home-screen grid (2-wide landscape cards)
-    static constexpr int GRID_COLS         = 2;
-    static constexpr int GRID_ROWS_VISIBLE = 2;
-
-    // Item cover grid (movies / series / episodes inside a library)
-    static constexpr int ITEM_GRID_COLS         = 4;
+    // Item cover grid (movies / series / episodes inside a library). Column
+    // count intentionally matches BGRID_COLS (below): this grid and its
+    // bottom-screen touchable mirror share one selection index, so they must
+    // agree on columns-per-row or moving the cursor looks diagonal on one of
+    // the two screens.
+    static constexpr int ITEM_GRID_COLS         = 3;
     static constexpr int ITEM_GRID_ROWS_VISIBLE = 2;
 
     // Bottom-screen touchable mirror grid, shared by the library, item, and
@@ -53,14 +53,15 @@ public:
     void drawErrorScreen(const std::string& msg);
     void drawServerRefreshScreen(const std::vector<JellyfinScanProgress>& scans, bool complete);
 
-    // Library home menu (Menu 1). Grid of library cover-art cards; covers is
-    // parallel to libs and a card whose covers[i].tex is null falls back to a
-    // colored placeholder. The grid is mirrored, smaller, onto the
-    // bottom screen so it can be touched (the top screen has no digitizer);
-    // tapping there moves the selection the same way circle-pad/D-Pad does.
+    // Library home menu (Menu 1). The library grid itself lives only on the
+    // touchable bottom screen (the top screen has no digitizer, and drawing
+    // the same grid a second time at a different column count is what caused
+    // the diagonal-selection bug); the top screen shows the Jellyfin logo
+    // instead. covers is parallel to libs; a card whose covers[i].tex is null
+    // falls back to a colored placeholder.
     void drawLibraryGrid(const std::vector<JellyfinLibrary>& libs,
                          const std::vector<C2D_Image>& covers,
-                         int selected, int offset);
+                         int selected);
 
     // Continue Watching menu (Menu 2): top screen shows a detail panel for the
     // highlighted item; the touchable poster grid lives on the bottom screen.
@@ -113,6 +114,7 @@ private:
     C3D_RenderTarget* bot_;
     C2D_Font          font_;
     C2D_TextBuf       textBuf_;
+    C2D_Image         logoImg_;   // Jellyfin logo, shown on the Library menu's top screen
 
     void drawText(const std::string& str, float x, float y, float scale, u32 color);
     void drawTextBuf(const std::string& str, float x, float y, float scale, u32 color,

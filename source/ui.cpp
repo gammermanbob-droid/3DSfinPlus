@@ -1,4 +1,6 @@
 #include "ui.h"
+#include "image.h"
+#include "jellyfin_logo.h"
 #include <cstdio>
 #include <cstring>
 #include <algorithm>
@@ -37,12 +39,14 @@ std::string UI::truncate(const std::string& str, size_t maxLen) {
 // ---- Construction ----------------------------------------------------------
 
 UI::UI(C3D_RenderTarget* top, C3D_RenderTarget* bot)
-    : top_(top), bot_(bot) {
+    : top_(top), bot_(bot), logoImg_{} {
     font_    = C2D_FontLoadSystem(CFG_REGION_USA);
     textBuf_ = C2D_TextBufNew(4096);
+    Image_loadFromMemory(jellyfin_logo_png, jellyfin_logo_png_len, &logoImg_);
 }
 
 UI::~UI() {
+    Image_free(&logoImg_);
     C2D_TextBufDelete(textBuf_);
     C2D_FontFree(font_);
 }
@@ -203,17 +207,6 @@ void UI::drawErrorScreen(const std::string& msg) {
 
     C2D_SceneBegin(bot_);
     drawBottomHints("A/B: Back to login");
-}
-
-// Placeholder card color, keyed off the library's collection type.
-static u32 placeholderColor(const std::string& type) {
-    if (type == "movies")   return C2D_Color32(0x2e, 0x4b, 0x8c, 0xFF); // blue
-    if (type == "tvshows")  return C2D_Color32(0x6b, 0x2e, 0x8c, 0xFF); // purple
-    if (type == "music")    return C2D_Color32(0x2e, 0x8c, 0x5a, 0xFF); // green
-    if (type == "books")    return C2D_Color32(0x8c, 0x6b, 0x2e, 0xFF); // amber
-    if (type == "homevideos" || type == "photos")
-                            return C2D_Color32(0x8c, 0x2e, 0x4b, 0xFF); // rose
-    return C2D_Color32(0x3a, 0x3a, 0x52, 0xFF);                         // neutral
 }
 
 // Draw an image so it fills the whole x/y/w/h box without distortion ("cover"):
@@ -399,59 +392,27 @@ int UI::hitTestLiveList(int touchX, int touchY, int count, int selected) {
 
 void UI::drawLibraryGrid(const std::vector<JellyfinLibrary>& libs,
                          const std::vector<C2D_Image>& covers,
-                         int selected, int offset) {
+                         int selected) {
+    // Top screen: branding only. The library grid used to be drawn here too,
+    // at a different column count than its bottom-screen touchable mirror —
+    // since both shared one selection index, D-Pad/circle-pad presses moved
+    // the highlight to a different-looking position on each screen, which
+    // read as the cursor drifting diagonally. There is now exactly one grid
+    // (bottom screen only, see below), so that mismatch can't recur.
     C2D_SceneBegin(top_);
     drawTopBar("Libraries");
     drawHomeMenuTabs(TAB_LIBRARY);
 
-    const int   cols   = GRID_COLS;
-    const int   rowsV  = GRID_ROWS_VISIBLE;
-    const float mx     = 10.0f;   // left/right margin
-    const float my     = 50.0f;   // top of grid (below the bar + tab strip)
-    const float gap    = 10.0f;   // gap between cards
-    const float cardW  = (TOP_W - 2 * mx - (cols - 1) * gap) / cols;  // ~185
-    const float cardH  = 80.0f;
-    const float pitchY = cardH + 10.0f;
-
-    if (libs.empty()) {
-        drawText("(no libraries found)", 8, 130, 0.50f, COL_GREY);
+    if (logoImg_.tex) {
+        float lw = 150.0f, lh = 150.0f;
+        C2D_DrawImageAt(logoImg_, (TOP_W - lw) / 2.0f, 56.0f, 0.3f,
+                        nullptr, lw / (float)logoImg_.subtex->width,
+                        lh / (float)logoImg_.subtex->height);
     }
+    drawText("3DSFin", (TOP_W - 6 * 0.55f * 11.0f) / 2.0f, 212, 0.55f, COL_WHITE);
 
-    for (int i = 0; i < cols * rowsV; i++) {
-        int idx = offset * cols + i;
-        if (idx >= (int)libs.size()) break;
-
-        int   c = i % cols, r = i / cols;
-        float x = mx + c * (cardW + gap);
-        float y = my + r * pitchY;
-        bool  sel = idx == selected;
-
-        if (sel) drawRect(x - 3, y - 3, cardW + 6, cardH + 6, COL_SEL);
-
-        bool hasImg = (idx < (int)covers.size() && covers[idx].tex != nullptr);
-        if (hasImg) {
-            drawImageCover(covers[idx], x, y, cardW, cardH);
-        } else {
-            drawRect(x, y, cardW, cardH, placeholderColor(libs[idx].collectionType));
-        }
-
-        // Name strip across the bottom of the card.
-        drawRect(x, y + cardH - 20, cardW, 20, C2D_Color32(0, 0, 0, 0xB0));
-        drawTextBuf(libs[idx].name, x + 6, y + cardH - 18, 0.44f, COL_WHITE, cardW - 12);
-    }
-
-    // Scrollbar when there are more rows than fit.
-    int totalRows = ((int)libs.size() + cols - 1) / cols;
-    if (totalRows > rowsV) {
-        float barH   = TOP_H - my;
-        float thumbH = barH * rowsV / totalRows;
-        float thumbY = my + barH * offset / totalRows;
-        drawRect(TOP_W - 4, my,     4, barH,   COL_ROW_ALT);
-        drawRect(TOP_W - 4, thumbY, 4, thumbH, COL_GREY);
-    }
-
-    // Bottom screen: the same grid, mirrored and touchable (the top screen has
-    // no digitizer, so this is the only way to select a library by tapping it).
+    // Bottom screen: the touchable library grid (the top screen has no
+    // digitizer, so this is the only way to select a library by tapping it).
     C2D_SceneBegin(bot_);
     drawRect(0, 0, BOT_W, BOT_H, COL_BG_BOT);
 
@@ -572,7 +533,7 @@ void UI::drawItemGrid(const std::vector<JellyfinItem>& items,
     const float mx     = 12.0f;
     const float my     = 28.0f;
     const float gap    = 10.0f;
-    const float cardW  = (TOP_W - 2 * mx - (cols - 1) * gap) / cols;  // ~86
+    const float cardW  = (TOP_W - 2 * mx - (cols - 1) * gap) / cols;  // ~119
     const float cardH  = 96.0f;
     const float pitchY = cardH + 12.0f;
 
