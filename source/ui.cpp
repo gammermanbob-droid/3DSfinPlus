@@ -523,63 +523,26 @@ void UI::drawLiveTvGuide(const std::vector<JellyfinItem>& channels,
 
 void UI::drawItemGrid(const std::vector<JellyfinItem>& items,
                       const std::vector<C2D_Image>& covers,
-                      int selected, int offset,
+                      int selected,
                       const std::string& title) {
+    // The interactive grid lives only on the touchable bottom screen (see
+    // below); the top screen just shows the title bar and the Jellyfin
+    // logo, same treatment as the Library home menu.
     C2D_SceneBegin(top_);
     drawTopBar(title);
 
-    const int   cols   = ITEM_GRID_COLS;
-    const int   rowsV  = ITEM_GRID_ROWS_VISIBLE;
-    const float mx     = 12.0f;
-    const float my     = 28.0f;
-    const float gap    = 10.0f;
-    const float cardW  = (TOP_W - 2 * mx - (cols - 1) * gap) / cols;  // ~119
-    const float cardH  = 96.0f;
-    const float pitchY = cardH + 12.0f;
+    if (logoImg_.tex) {
+        float lw = 150.0f, lh = 150.0f;
+        C2D_DrawImageAt(logoImg_, (TOP_W - lw) / 2.0f, 56.0f, 0.3f,
+                        nullptr, lw / (float)logoImg_.subtex->width,
+                        lh / (float)logoImg_.subtex->height);
+    }
 
     if (items.empty())
-        drawText("(no items found)", 8, 110, 0.50f, COL_GREY);
+        drawText("(no items found)", (TOP_W - 17 * 0.50f * 11.0f) / 2.0f, 216, 0.50f, COL_GREY);
 
-    for (int i = 0; i < cols * rowsV; i++) {
-        int idx = offset * cols + i;
-        if (idx >= (int)items.size()) break;
-
-        int   c = i % cols, r = i / cols;
-        float x = mx + c * (cardW + gap);
-        float y = my + r * pitchY;
-        bool  sel = (idx == selected);
-
-        if (sel) drawRect(x - 3, y - 3, cardW + 6, cardH + 6, COL_SEL);
-
-        bool hasImg = (idx < (int)covers.size() && covers[idx].tex != nullptr);
-        if (hasImg) drawImageCover(covers[idx], x, y, cardW, cardH);
-        else        drawRect(x, y, cardW, cardH, COL_ROW_ALT);
-
-        // Resume progress for partially-watched items.
-        if (items[idx].runTimeTicks > 0 && items[idx].resumeTicks > 0) {
-            float frac = (float)items[idx].resumeTicks / (float)items[idx].runTimeTicks;
-            if (frac > 1.0f) frac = 1.0f;
-            drawRect(x, y + cardH - 4, cardW,        4, C2D_Color32(0, 0, 0, 0xC0));
-            drawRect(x, y + cardH - 4, cardW * frac, 4, COL_YELLOW);
-        }
-
-        // Title strip across the bottom of the card.
-        drawRect(x, y + cardH - 20, cardW, 16, C2D_Color32(0, 0, 0, 0xB0));
-        drawTextBuf(items[idx].name, x + 4, y + cardH - 18, 0.38f, COL_WHITE, cardW - 8);
-    }
-
-    // Scrollbar when there are more rows than fit.
-    int totalRows = ((int)items.size() + cols - 1) / cols;
-    if (totalRows > rowsV) {
-        float barH   = TOP_H - 26;
-        float thumbH = barH * rowsV / totalRows;
-        float thumbY = 26 + barH * offset / totalRows;
-        drawRect(TOP_W - 4, 26,     4, barH,   COL_ROW_ALT);
-        drawRect(TOP_W - 4, thumbY, 4, thumbH, COL_GREY);
-    }
-
-    // Bottom screen: the same grid, mirrored and touchable, with a one-line
-    // metadata strip for the selected item beneath it.
+    // Bottom screen: the touchable grid, with a one-line metadata strip for
+    // the selected item beneath it.
     C2D_SceneBegin(bot_);
     drawRect(0, 0, BOT_W, BOT_H, COL_BG_BOT);
 

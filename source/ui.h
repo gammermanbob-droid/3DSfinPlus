@@ -13,13 +13,13 @@ public:
     static constexpr int BOT_W         = 320;
     static constexpr int BOT_H         = 240;
 
-    // Item cover grid (movies / series / episodes inside a library). Column
-    // count intentionally matches BGRID_COLS (below): this grid and its
-    // bottom-screen touchable mirror share one selection index, so they must
-    // agree on columns-per-row or moving the cursor looks diagonal on one of
-    // the two screens.
-    static constexpr int ITEM_GRID_COLS         = 3;
-    static constexpr int ITEM_GRID_ROWS_VISIBLE = 2;
+    // D-pad navigation step for the item list (movies / series / episodes
+    // inside a library). There is no separate top-screen grid any more -
+    // items are shown only in the bottom-screen touchable mirror grid - but
+    // KEY_LEFT/RIGHT/UP/DOWN still need a columns-per-row value to know how
+    // far one D-pad press moves the selection, so this intentionally matches
+    // BGRID_COLS (below), which is what the mirror grid actually renders.
+    static constexpr int ITEM_GRID_COLS = 3;
 
     // Bottom-screen touchable mirror grid, shared by the library, item, and
     // Continue Watching menus so a tap's hit-test always matches what's drawn
@@ -90,12 +90,15 @@ public:
     // Touch hit-testing for the Live TV guide's channel list (see LIVE_ROW_* above).
     static int hitTestLiveList(int touchX, int touchY, int count, int selected);
 
-    // Cover grid of the items inside a library level (movies, series, or
-    // episodes). covers is parallel to items; a null tex falls back to a colored
-    // placeholder. title is shown in the top bar (library or series name).
+    // Items inside a library level (movies, series, episodes, search
+    // results, ...). The touchable grid lives on the bottom screen only
+    // (drawBottomMirrorGrid); the top screen shows title and the Jellyfin
+    // logo, matching drawLibraryGrid. covers is parallel to items; a null
+    // tex falls back to a colored placeholder. title is shown in the top bar
+    // (library or series name).
     void drawItemGrid(const std::vector<JellyfinItem>& items,
                       const std::vector<C2D_Image>& covers,
-                      int selected, int offset,
+                      int selected,
                       const std::string& title);
 
     // Audio-track picker shown before playback (SELECT on an item). rows are the
@@ -114,7 +117,8 @@ private:
     C3D_RenderTarget* bot_;
     C2D_Font          font_;
     C2D_TextBuf       textBuf_;
-    C2D_Image         logoImg_;   // Jellyfin logo, shown on the Library menu's top screen
+    C2D_Image         logoImg_;   // Jellyfin logo, shown in place of the item grid on the
+                                    // Library menu and item-browsing (movies/series/etc.) top screens
 
     void drawText(const std::string& str, float x, float y, float scale, u32 color);
     void drawTextBuf(const std::string& str, float x, float y, float scale, u32 color,

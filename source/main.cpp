@@ -67,7 +67,7 @@ struct BrowseLevel {
     std::vector<JellyfinItem> items;
     std::vector<std::string>  coverData;
     std::vector<C2D_Image>    covers;
-    int sel = 0, offset = 0;
+    int sel = 0;
 };
 static std::vector<BrowseLevel> browseStack;
 
@@ -765,11 +765,6 @@ int main() {
                 if (kDown & KEY_LEFT  && (lv.sel % cols) != 0)                          lv.sel--;
                 if (kDown & KEY_DOWN  && lv.sel + cols < n)                             lv.sel += cols;
                 if (kDown & KEY_UP    && lv.sel - cols >= 0)                            lv.sel -= cols;
-                // Keep the selected row within the visible window (offset in rows).
-                int selRow = lv.sel / cols;
-                if (selRow < lv.offset) lv.offset = selRow;
-                if (selRow >= lv.offset + UI::ITEM_GRID_ROWS_VISIBLE)
-                    lv.offset = selRow - UI::ITEM_GRID_ROWS_VISIBLE + 1;
 
                 if (kDown & KEY_A && n > 0) {
                     JellyfinItem& it = lv.items[lv.sel];
@@ -990,7 +985,7 @@ int main() {
                 break;
             case STATE_ITEMS: {
                 BrowseLevel& lv = browseStack.back();
-                ui.drawItemGrid(lv.items, lv.covers, lv.sel, lv.offset, lv.title);
+                ui.drawItemGrid(lv.items, lv.covers, lv.sel, lv.title);
                 break;
             }
             case STATE_TRACKS: {
